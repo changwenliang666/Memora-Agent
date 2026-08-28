@@ -3,18 +3,17 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
 class LLMProvider:
-    def __init__(self,model_name: str = "ollama"):
+    def __init__(self):
         self.providers = {
-            provider.provider_name: provider for provider in llm_provider_config.providers
+            provider.provider_type: provider for provider in llm_provider_config.providers
         }
-        self.current_model = self.get_provider(model_name)
-    
-    def get_provider(self, provider_name: str = "ollama"):
-        provider_config = self.providers.get(provider_name)
+    # 根据provider_type获取provider (获取具体的llm模型)
+    def get_provider(self, provider_type: str = "ollama"):
+        provider_config = self.providers.get(provider_type)
         if not provider_config:
-            raise ValueError(f"Provider {provider_name} not found")
+            raise ValueError(f"Provider {provider_type} not found")
         
-        if provider_name == "ollama":
+        if provider_type == "ollama":
             return ChatOllama(
                 base_url=provider_config.base_url.replace("localhost", "127.0.0.1"),
                 model=provider_config.model_name, 
@@ -22,7 +21,7 @@ class LLMProvider:
                 temperature=provider_config.temperature,
                 client_kwargs={"trust_env": False},
             )
-        elif provider_name == "deepseek":
+        elif provider_type == "website_api":
             return ChatOpenAI(
                 api_key=provider_config.api_key,
                 base_url=provider_config.base_url,
@@ -35,6 +34,7 @@ class LLMProvider:
                 },
             )
         else:
-            raise ValueError(f"Provider {provider_name} not supported")
+            raise ValueError(f"Provider {provider_type} not supported")
+
 
 llm_provider = LLMProvider()

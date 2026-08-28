@@ -7,6 +7,9 @@ from langchain_core.messages import HumanMessage
 
 from memora_agent.core.provider import llm_provider
 from memora_agent.schema.chat import ChatRequest
+from memora_agent.tools.tools import Tools
+from memora_agent.agent.agent import Agent
+from memora_agent.schema.config import AgentConfig
 
 chat_router = APIRouter(
     prefix="/chat",
@@ -43,3 +46,25 @@ async def chat(request: ChatRequest):
     #         "X-Accel-Buffering": "no",
     #     },
     # )
+    tools = Tools()
+    return {"message": "hello world", "tools": tools.tools}
+
+@chat_router.post("/agent")
+async def agent(request: ChatRequest):
+    try:
+        tools = Tools()
+        agent = Agent(AgentConfig(
+            provider_type="ollama",
+            tools=tools.get_all_tools(),
+            history_messages=[],
+            system_prompt="你是一个ai助手,根据用户的提问，简洁明了的回答用户的问题.",
+            human_input_message=request.message,
+            stream=False,
+            max_round=10,
+        ))
+        print(agent.build_system_prompt)
+        response = await agent.run_loop()
+    except Exception as e:
+        return {"message": "error", "error": str(e)}
+    
+    return {"message": "hello world", "agent": response}

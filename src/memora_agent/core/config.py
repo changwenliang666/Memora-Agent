@@ -24,14 +24,14 @@ class LLMProviderConfig(BaseSettings):
     def providers(self) -> list[ProviderConfig]:
         return [
             ProviderConfig(
-                provider_name="ollama",
+                provider_type="ollama",
                 base_url=self.ollama_base_url,
                 model_name=self.ollama_model_name,
                 think=self.ollama_think,
                 temperature=self.ollama_temperature
             ),
             ProviderConfig(
-                provider_name="deepseek",
+                provider_type="website_api",
                 base_url=self.deepseek_base_url,
                 api_key=self.deepseek_api_key,
                 model_name=self.deepseek_model_name,
