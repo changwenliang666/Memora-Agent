@@ -4,7 +4,7 @@
 
 ## 简介
 
-当前实现是一个可配置的 ReAct 风格 Agent 循环：模型按需发起工具调用，服务端执行工具并把结果回填到对话中，直到模型给出最终回复或达到最大轮数。适合作为后续扩展（流式输出、图编排、更多工具）的底座。
+当前实现是一个可配置的 ReAct 风格 Agent 循环：先用规则和意图分类过滤用户输入，再由模型按需发起工具调用，服务端执行工具并把结果回填到对话中，直到给出最终回复或达到最大轮数。适合作为后续扩展（流式输出、图编排、记忆）的底座。
 
 ## 技术栈
 
@@ -13,12 +13,14 @@
 | API 服务 | FastAPI | HTTP 接口与 OpenAPI 文档 |
 | Agent | 自研循环 + LangChain | `bind_tools` + `ainvoke` 工具调用 |
 | 模型接入 | langchain-ollama / langchain-openai | 本地 Ollama 与 OpenAI 兼容 API（如 DeepSeek） |
-| 配置 | pydantic-settings | 从 `.env` 读取模型提供商配置 |
+| 配置 | pydantic-settings + TOML | TOML 保存模型清单，`.env` 保存密钥 |
 | 运行时 | Python ≥ 3.14 | 见 `.python-version` |
 
 ## 特性
 
-- **多模型提供商**：`ollama`（本地）与 `website_api`（OpenAI 兼容，当前配置为 DeepSeek）
+- **多模型提供商**：`ollama`（本地）与 `openai`（OpenAI 兼容，当前配置为 DeepSeek），每个 Provider 可配置多个模型
+- **规则校验**：按主题词 + 动作意图拦截不支持的问题
+- **意图分类**：Few-shot 分类为 `history` / `weather` / `other`，低置信度时拒绝回答
 - **工具调用循环**：最多 `max_round` 轮；同步 / 异步工具统一走 `ainvoke`
 - **内置示例工具**：查询天气（模拟）、获取当前时间
 - **服务化接入**：FastAPI 暴露 REST API
@@ -34,27 +36,36 @@ uv sync
 
 # 配置环境变量
 cp .example.env .env
-# 按需填写 Ollama / DeepSeek 相关配置
+# 按需填写在线模型的 API Key
 ```
 
-在项目根目录创建 `.env`（若 `.example.env` 为空，可直接按下面模板写入）：
+模型清单位于 `config/models.toml`。Provider 保存连接信息，`models`
+数组保存该 Provider 下可选的多个模型：
+
+```toml
+[providers.ollama]
+base_url = "http://localhost:11434"
+temperature = 0.7
+
+[[providers.ollama.models]]
+name = "qwen3.5:4b-mlx"
+
+[providers.openai]
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[[providers.openai.models]]
+name = "deepseek-chat"
+```
+
+Provider 级的 `think` 和 `temperature` 是默认值，模型条目中的同名参数可覆盖它们。
+在线密钥不写入 TOML，只在 `.env` 中配置：
 
 ```env
-# Ollama（本地）
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL_NAME=qwen3.5:4b
-OLLAMA_THINK=false
-OLLAMA_TEMPERATURE=0.7
-
-# OpenAI 兼容接口（当前用于 DeepSeek）
-DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_API_KEY=sk-your-key
-DEEPSEEK_MODEL_NAME=deepseek-v4-flash
-DEEPSEEK_THINK=false
-DEEPSEEK_TEMPERATURE=0.7
 ```
 
-使用本地 Ollama 时，需先启动 Ollama 并拉取对应模型。
+使用本地 Ollama 时，需先启动 Ollama 并拉取 TOML 中对应的模型。
 
 ```bash
 uv run uvicorn memora_agent.main:app --reload
@@ -70,14 +81,20 @@ uv run uvicorn memora_agent.main:app --reload
 ```bash
 curl -X POST http://127.0.0.1:8000/chat/agent \
   -H "Content-Type: application/json" \
-  -d '{"message": "现在几点了？"}'
+  -d '{"message": "现在几点了？", "provider_type": "ollama", "model_name": "qwen3.5:4b-mlx"}'
 ```
 
 请求体：
 
 ```json
-{ "message": "用户问题，1～500 字" }
+{
+  "message": "用户问题，1～500 字",
+  "provider_type": "ollama",
+  "model_name": "qwen3.5:4b-mlx"
+}
 ```
+
+`provider_type` 与 `model_name` 由调用方指定，对应 `config/models.toml` 中已配置的 Provider 和模型。
 
 成功时返回类似：
 
@@ -95,29 +112,48 @@ curl -X POST http://127.0.0.1:8000/chat/agent \
 
 | 方法 | 路径 | 状态 | 说明 |
 |------|------|------|------|
-| `POST` | `/chat/agent` | 可用 | 运行 Agent 循环并返回最终回复；当前固定使用 `ollama` 提供商 |
+| `POST` | `/chat/agent` | 可用 | 运行 Agent 循环；可按 `provider_type + model_name` 选择模型 |
+| `POST` | `/chat/rule` | 可用 | 规则校验：是否允许回答，以及命中的分类 / 主题 / 意图 |
+| `POST` | `/chat/intent` | 可用 | 意图分类：`history` / `weather` / `other`，低置信度返回固定话术 |
 | `POST` | `/chat/stream` | 占位 | 流式接口尚未接上，目前返回占位 JSON |
+
+请求体统一为 `ChatRequest`：必填 `message`。`/chat/agent` 还需要 `provider_type` 和 `model_name`。
 
 ## 项目结构
 
 ```
 Memora-Agent/
+├── config/
+│   └── models.toml                 # Provider 与模型清单
 ├── src/memora_agent/
-│   ├── main.py                 # FastAPI 入口，挂载路由
+│   ├── main.py                     # FastAPI 入口，挂载 /chat 路由
 │   ├── agent/
-│   │   └── agent.py            # Agent：拼提示词、执行工具、循环推理
+│   │   └── agent.py                # Agent：拼提示词、执行工具、循环推理
 │   ├── api/
 │   │   └── chat/
-│   │       └── chat.py         # /chat 路由
+│   │       └── chat.py             # /chat/agent、/rule、/intent、/stream
 │   ├── core/
-│   │   ├── config.py           # 从 .env 加载提供商配置
-│   │   └── provider.py         # LLMProvider：按类型构造 ChatOllama / ChatOpenAI
+│   │   ├── config.py               # 加载并校验 TOML，从 .env 读取密钥
+│   │   └── provider.py             # 按 provider_type + model_name 构造 Chat 模型
+│   ├── intent_classify/
+│   │   ├── intent_classify.py      # Few-shot 意图分类
+│   │   └── few_shot.py             # 意图分类示例
+│   ├── rule/
+│   │   ├── rule.py                 # 主题词 + 动作意图规则
+│   │   └── policy.py               # 拦截词表
 │   ├── schema/
-│   │   ├── chat.py             # ChatRequest
-│   │   ├── config.py           # ProviderConfig、AgentConfig
-│   │   └── tools.py            # 工具列表与参数 Schema
-│   └── tools/
-│       └── tools.py            # 内置工具定义与注册
+│   │   ├── chat.py                 # ChatRequest
+│   │   ├── config.py               # 模型 / Provider / Agent 配置类型
+│   │   ├── intent.py               # 意图识别结果
+│   │   └── tools.py                # 工具列表与参数 Schema
+│   ├── tools/
+│   │   └── tools.py                # 内置工具定义与注册
+│   ├── graph/                      # 预留：图编排
+│   └── memory/                     # 预留：记忆
+├── tests/
+│   ├── core/                       # 配置加载与模型选择
+│   └── rule/                       # 规则拦截
+├── .example.env                    # 在线模型 API Key 模板
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
@@ -127,9 +163,12 @@ Memora-Agent/
 
 | 模块 | 职责 |
 |------|------|
+| `api.chat` | 对外 HTTP 入口，把请求转给 Agent / Rule / IntentClassify |
 | `agent.Agent` | 绑定工具、构建系统提示词、按 `tool_calls` 调用工具并回填历史 |
-| `core.LLMProvider` | 根据 `provider_type` 返回对应 Chat 模型 |
-| `core.LLMProviderConfig` | 读取 Ollama / DeepSeek 环境变量并组装 `ProviderConfig` |
+| `core.LLMProviderConfig` | 从 TOML 读取 Provider 和模型清单 |
+| `core.LLMProvider` | 根据 `provider_type + model_name` 返回对应 Chat 模型 |
+| `intent_classify.IntentClassify` | 用小模型做 Few-shot 意图分类，低置信度拒绝回答 |
+| `rule.Rule` | 同时命中主题词和动作词时拦截输入 |
 | `tools.Tools` | 注册 `get_weather`、`get_current_time`，生成工具列表与提示文案 |
 
 ## Agent 循环
@@ -155,9 +194,11 @@ Memora-Agent/
 ```bash
 uv sync --dev
 uv run uvicorn memora_agent.main:app --reload
+uv run pytest
 ```
 
-切换模型提供商时，修改 `AgentConfig.provider_type` 为 `"ollama"` 或 `"website_api"`（当前 `/chat/agent` 写死为 `ollama`）。
+新增模型时，只需在 `config/models.toml` 对应 Provider 下增加 `[[providers.<type>.models]]` 条目。
+调用 `/chat/agent` 时传入 `"ollama"` 或 `"openai"` 以及对应模型名即可切换。
 
 ## License
 

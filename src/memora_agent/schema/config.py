@@ -1,28 +1,39 @@
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
 from typing import Literal
+
 from langchain_core.messages import BaseMessage
+from pydantic import BaseModel, Field
+
 from memora_agent.schema.tools import ToolsDictList
 
+ProviderType = Literal["ollama", "openai"]
+
+
+class ModelConfig(BaseModel):
+    name: str = Field(min_length=1)
+    think: bool | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+
+
 class ProviderConfig(BaseModel):
-    provider_type: Literal["ollama", "website_api"]
     base_url: str
-    api_key: str | None = None
-    model_name: str
-    think:bool = False
-    temperature: float = 0.7
+    api_key_env: str | None = None
+    think: bool = False
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    models: list[ModelConfig] = Field(min_length=1)
+
 
 class AgentConfig(BaseModel):
-    provider_type: Literal["ollama", "website_api"] = Field(default="ollama")
-    # 可使用的工具列表（用于调用外部工具）
-    tools: ToolsDictList = Field(default=ToolsDictList(tools_prompt="",tools_list=[]))
-    # 历史对话记录（用于上下文）
-    history_messages: list[BaseMessage] = Field(default=[])
-    # 系统提示词
-    system_prompt: str = Field(default="你是一个ai助手,根据用户的提问，简洁明了的回答用户的问题.",min_length=10,max_length=1000)
-    # 用户输入消息
-    human_input_message: str = Field(default="",min_length=1,max_length=500)
-    # 返回消息类型 流式返回还是一次性返回 默认一次性返回
+    provider_type: ProviderType
+    model_name: str = Field(min_length=1)
+    tools: ToolsDictList = Field(
+        default_factory=lambda: ToolsDictList(tools_prompt="", tools_list=[])
+    )
+    history_messages: list[BaseMessage] = Field(default_factory=list)
+    system_prompt: str = Field(
+        default="你是一个ai助手,根据用户的提问，简洁明了的回答用户的问题.",
+        min_length=10,
+        max_length=1000,
+    )
+    human_input_message: str = Field(default="", min_length=1, max_length=500)
     stream: bool = Field(default=False)
-    # 模型循环最大轮数
     max_round: int = Field(default=10)

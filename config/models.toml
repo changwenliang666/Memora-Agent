@@ -1,0 +1,23 @@
+[providers.ollama]
+base_url = "http://localhost:11434"
+think = false
+temperature = 0.7
+
+[[providers.ollama.models]]
+name = "qwen3.5:4b-mlx"
+temperature = 0.2
+
+[[providers.ollama.models]]
+name = "qwen3.5:4b"
+
+[providers.openai]
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+think = false
+temperature = 0.7
+
+[[providers.openai.models]]
+name = "deepseek-v4-flash"
+
+[[providers.openai.models]]
+name = "deepseek-chat"

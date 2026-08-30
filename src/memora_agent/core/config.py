@@ -1,43 +1,28 @@
-from memora_agent.schema.config import ProviderConfig
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
+import tomllib
+from pathlib import Path
 
-class LLMProviderConfig(BaseSettings):
-    
-    ollama_base_url:str
-    ollama_model_name:str
-    ollama_think:bool = False
-    ollama_temperature:float = 0.7
+from dotenv import dotenv_values
+from pydantic import BaseModel
 
-    deepseek_base_url:str
-    deepseek_model_name:str
-    deepseek_api_key:str
-    deepseek_think:bool = False
-    deepseek_temperature:float = 0.7
+from memora_agent.schema.config import ProviderConfig, ProviderType
 
-    model_config = SettingsConfigDict(
-        env_file=".env", 
-        env_file_encoding="utf-8",
-        extra="ignore"
-    )
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+MODELS_CONFIG_FILE = PROJECT_ROOT / "config" / "models.toml"
+ENV_FILE = PROJECT_ROOT / ".env"
 
-    @property
-    def providers(self) -> list[ProviderConfig]:
-        return [
-            ProviderConfig(
-                provider_type="ollama",
-                base_url=self.ollama_base_url,
-                model_name=self.ollama_model_name,
-                think=self.ollama_think,
-                temperature=self.ollama_temperature
-            ),
-            ProviderConfig(
-                provider_type="website_api",
-                base_url=self.deepseek_base_url,
-                api_key=self.deepseek_api_key,
-                model_name=self.deepseek_model_name,
-                think=self.deepseek_think,
-                temperature=self.deepseek_temperature
-            ),
-        ]
 
-llm_provider_config = LLMProviderConfig()
+def get_secret(name: str) -> str | None:
+    return os.getenv(name) or dotenv_values(ENV_FILE).get(name)
+
+
+class LLMProviderConfig(BaseModel):
+    providers: dict[ProviderType, ProviderConfig]
+
+
+def load_llm_provider_config() -> LLMProviderConfig:
+    with MODELS_CONFIG_FILE.open("rb") as file:
+        return LLMProviderConfig.model_validate(tomllib.load(file))
+
+
+llm_provider_config = load_llm_provider_config()
