@@ -8,7 +8,8 @@ name = "qwen3.5:4b-mlx"
 temperature = 0.2
 
 [[providers.ollama.models]]
-name = "qwen3.5:4b"
+name = "qwen3.5:2b"
+temperature = 0.1
 
 [providers.openai]
 base_url = "https://api.deepseek.com"

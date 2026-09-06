@@ -35,7 +35,7 @@ def test_toml_loads_multiple_models_per_provider() -> None:
     openai_models = [
         model.name for model in llm_provider_config.providers["openai"].models
     ]
-    assert ollama_models == ["qwen3.5:4b-mlx", "qwen3.5:4b"]
+    assert ollama_models == ["qwen3.5:4b-mlx", "qwen3.5:2b"]
     assert openai_models == ["deepseek-v4-flash", "deepseek-chat"]
 
 

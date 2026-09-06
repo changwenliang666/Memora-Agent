@@ -116,8 +116,12 @@ curl -X POST http://127.0.0.1:8000/chat/agent \
 | `POST` | `/chat/rule` | 可用 | 规则校验：是否允许回答，以及命中的分类 / 主题 / 意图 |
 | `POST` | `/chat/intent` | 可用 | 意图分类：`history` / `weather` / `other`，低置信度返回固定话术 |
 | `POST` | `/chat/stream` | 占位 | 流式接口尚未接上，目前返回占位 JSON |
+| `POST` | `/files/presign` | 可用 | 按申报校验类型 / 大小后，签发 R2 预签名 PUT 地址 |
+| `POST` | `/files/complete` | 可用 | 回传前端申报的上传信息；本次不读桶、不落库 |
 
 请求体统一为 `ChatRequest`：必填 `message`。`/chat/agent` 还需要 `provider_type` 和 `model_name`。
+
+文件直传的流程、预签名原理和 `.env` 填法见 [docs/r2-file-upload.md](docs/r2-file-upload.md)。
 
 ## 项目结构
 
@@ -126,14 +130,16 @@ Memora-Agent/
 ├── config/
 │   └── models.toml                 # Provider 与模型清单
 ├── src/memora_agent/
-│   ├── main.py                     # FastAPI 入口，挂载 /chat 路由
+│   ├── main.py                     # FastAPI 入口，挂载 /chat 与 /files
 │   ├── agent/
 │   │   └── agent.py                # Agent：拼提示词、执行工具、循环推理
 │   ├── api/
-│   │   └── chat/
-│   │       └── chat.py             # /chat/agent、/rule、/intent、/stream
+│   │   ├── chat/
+│   │   │   └── chat.py             # /chat/agent、/rule、/intent、/stream
+│   │   └── files/
+│   │       └── files.py            # /files/presign、/files/complete
 │   ├── core/
-│   │   ├── config.py               # 加载并校验 TOML，从 .env 读取密钥
+│   │   ├── config.py               # 加载 TOML 与 R2 环境变量
 │   │   └── provider.py             # 按 provider_type + model_name 构造 Chat 模型
 │   ├── intent_classify/
 │   │   ├── intent_classify.py      # Few-shot 意图分类
@@ -144,16 +150,25 @@ Memora-Agent/
 │   ├── schema/
 │   │   ├── chat.py                 # ChatRequest
 │   │   ├── config.py               # 模型 / Provider / Agent 配置类型
+│   │   ├── files.py                # 文件直传请求 / 响应
 │   │   ├── intent.py               # 意图识别结果
 │   │   └── tools.py                # 工具列表与参数 Schema
+│   ├── storage/
+│   │   ├── r2.py                   # boto3 签发 R2 预签名 URL
+│   │   └── validate.py             # 文件类型与大小白名单
 │   ├── tools/
 │   │   └── tools.py                # 内置工具定义与注册
 │   ├── graph/                      # 预留：图编排
 │   └── memory/                     # 预留：记忆
 ├── tests/
+│   ├── api/                        # /files 接口
 │   ├── core/                       # 配置加载与模型选择
+│   ├── schema/                     # 请求体校验
+│   ├── storage/                    # R2 签发与文件申报校验
 │   └── rule/                       # 规则拦截
-├── .example.env                    # 在线模型 API Key 模板
+├── docs/
+│   └── r2-file-upload.md           # 文件直传教学文档
+├── .example.env                    # 在线模型 API Key 与 R2 占位
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
@@ -164,6 +179,8 @@ Memora-Agent/
 | 模块 | 职责 |
 |------|------|
 | `api.chat` | 对外 HTTP 入口，把请求转给 Agent / Rule / IntentClassify |
+| `api.files` | 签发 R2 临时上传地址，并回传申报的文件信息 |
+| `storage` | 文件申报校验与 boto3 预签名 |
 | `agent.Agent` | 绑定工具、构建系统提示词、按 `tool_calls` 调用工具并回填历史 |
 | `core.LLMProviderConfig` | 从 TOML 读取 Provider 和模型清单 |
 | `core.LLMProvider` | 根据 `provider_type + model_name` 返回对应 Chat 模型 |
