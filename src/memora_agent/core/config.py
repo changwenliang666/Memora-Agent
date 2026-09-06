@@ -50,6 +50,9 @@ class R2Config(BaseModel):
             )
         )
 
+class MineruConfig(BaseModel):
+    api_key:str | None = None;
+
 
 def load_llm_provider_config() -> LLMProviderConfig:
     with MODELS_CONFIG_FILE.open("rb") as file:
@@ -66,6 +69,9 @@ def load_r2_config() -> R2Config:
         bucket_name=_env_value("R2_BUCKET_NAME"),
         key_prefix=_env_value("R2_KEY_PREFIX"),
     )
+
+def load_mineru_config() -> MineruConfig:
+    return MineruConfig(api_key=_env_value("MINERU_API_KEY"))
 
 
 llm_provider_config = load_llm_provider_config()

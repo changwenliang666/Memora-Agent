@@ -1,5 +1,10 @@
 from memora_agent.core.config import R2Config
-from memora_agent.storage.r2 import PRESIGN_EXPIRES_IN, R2ConfigError, R2Storage
+from memora_agent.storage.r2 import (
+    PRESIGN_EXPIRES_IN,
+    PRESIGN_GET_EXPIRES_IN,
+    R2ConfigError,
+    R2Storage,
+)
 
 
 class FakeS3Client:
@@ -8,6 +13,8 @@ class FakeS3Client:
 
     def generate_presigned_url(self, operation, Params, ExpiresIn):
         self.calls.append((operation, Params, ExpiresIn))
+        if operation == "get_object":
+            return "https://r2.example/download"
         return "https://r2.example/upload"
 
 
@@ -60,6 +67,38 @@ def test_presign_put_requires_complete_config() -> None:
 
     try:
         storage.presign_put("notes.pdf", "application/pdf")
+    except R2ConfigError as exc:
+        assert "R2" in str(exc)
+    else:
+        raise AssertionError("expected R2ConfigError")
+
+
+def test_presign_get_returns_url_key_and_expiry() -> None:
+    client = FakeS3Client()
+    storage = R2Storage(make_config(), client=client)
+
+    result = storage.presign_get("abc/notes.pdf")
+
+    assert result.download_url == "https://r2.example/download"
+    assert result.object_key == "abc/notes.pdf"
+    assert result.expires_in == PRESIGN_GET_EXPIRES_IN
+    assert client.calls == [
+        (
+            "get_object",
+            {
+                "Bucket": "memora-files",
+                "Key": "abc/notes.pdf",
+            },
+            PRESIGN_GET_EXPIRES_IN,
+        )
+    ]
+
+
+def test_presign_get_requires_complete_config() -> None:
+    storage = R2Storage(R2Config(), client=FakeS3Client())
+
+    try:
+        storage.presign_get("abc/notes.pdf")
     except R2ConfigError as exc:
         assert "R2" in str(exc)
     else:

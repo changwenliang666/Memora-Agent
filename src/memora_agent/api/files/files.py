@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException
-
 from memora_agent.core.config import load_r2_config
 from memora_agent.schema.files import (
     CompleteRequest,
@@ -9,6 +8,9 @@ from memora_agent.schema.files import (
 )
 from memora_agent.storage.r2 import R2ConfigError, R2Storage
 from memora_agent.storage.validate import FileDeclarationError, validate_declaration
+from memora_agent.service.rag_service import RagService
+from fastapi import BackgroundTasks
+from memora_agent.schema.response import ResponseStructure
 
 files_router = APIRouter(
     prefix="/files",
@@ -44,15 +46,31 @@ async def presign(request: PresignRequest) -> PresignResponse:
     )
 
 
-@files_router.post("/complete", response_model=FileInfo)
-async def complete(request: CompleteRequest) -> FileInfo:
-    """把前端申报的上传信息收成统一结构。本次不读桶、不落库。
+@files_router.post("/complete", response_model=ResponseStructure[FileInfo])
+async def complete(request: CompleteRequest, background_tasks: BackgroundTasks):
+    """按申报的 object_key 签发短时 GET，不读桶、不落库。
 
-    以后入库加在这里：在 return 之前把 FileInfo 写入数据库即可，不必改协议。
+    download_url 可直接交给 MinerU loader。以后入库加在 return 之前即可。
     """
-    return FileInfo(
-        object_key=request.object_key,
-        filename=request.filename,
-        content_type=request.content_type,
-        size=request.size,
+    try:
+        result = get_r2_storage().presign_get(request.object_key)
+    except R2ConfigError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    background_tasks.add_task(
+        RagService.build_knowledge_base,
+        result.download_url,
+        request.object_key,
+        request.filename,
+    )
+    return ResponseStructure[FileInfo](
+        message="文档正在处理中...",
+        data = FileInfo(
+            object_key=request.object_key,
+            filename=request.filename,
+            content_type=request.content_type,
+            size=request.size,
+            download_url=result.download_url,
+            expires_in=result.expires_in,
+        )
     )

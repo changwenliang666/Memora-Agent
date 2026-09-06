@@ -39,8 +39,8 @@
  |  POST /files/complete          |                                 |
  |  object_key, filename,         |                                 |
  |  content_type, size            |                                 |
- |------------------------------->|  不读桶、不落库，原样整理返回     |
- |  FileInfo                      |                                 |
+ |------------------------------->|  本地签发 GET，不读对象字节       |
+ |  FileInfo + download_url       |                                 |
  |<-------------------------------|                                 |
 ```
 
@@ -52,7 +52,7 @@
 | 签发 URL | 后端 | `src/memora_agent/storage/r2.py` |
 | HTTP 入口 | 后端 | `src/memora_agent/api/files/files.py` |
 | 真正传文件 | 前端 / 浏览器 | 本仓库没有前端，用 curl 或网页 `PUT` |
-| 回传元数据 | 后端 | `files.py` 的 `complete` |
+| 回传元数据 + 短时 GET | 后端 | `files.py` 的 `complete`，`R2Storage.presign_get` |
 
 ---
 
@@ -70,13 +70,15 @@ endpoint 由 Account ID 拼出来，不单独配置：
 https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com
 ```
 
-region 对 R2 固定写 `auto`。见 `R2Storage.presign_put`。
+region 对 R2 固定写 `auto`。见 `R2Storage.presign_put` 和 `presign_get`。
 
 `object_key` 的形状是 `{uuid4()}/{原文件名}`，例如 `3f2a.../notes.pdf`。若 `.env` 填了 `R2_KEY_PREFIX`，则变成 `{前缀}/{uuid4()}/{原文件名}`，例如 `knowledge-base/3f2a.../notes.pdf`。前面的 UUID 避免两人上传同名文件时互相覆盖；后面的文件名以后还能还原。
 
-有效期 900 秒（15 分钟），响应里的 `expires_in` 就是这个数。前端必须在过期前 `PUT`。
+PUT 有效期 900 秒（15 分钟），`presign` 响应里的 `expires_in` 就是这个数。前端必须在过期前 `PUT`。
 
-签发时带了 `ContentType`。浏览器上传时 **必须使用同一个 Content-Type**，否则 R2 会认为签名不匹配而拒绝。
+GET 有效期 3600 秒（1 小时），`complete` 响应里的 `expires_in` 是这个更长的值，留给 MinerU 排队后再拉。`presign_get` 同样只做本地 HMAC，不读桶。
+
+签发 PUT 时带了 `ContentType`。浏览器上传时 **必须使用同一个 Content-Type**，否则 R2 会认为签名不匹配而拒绝。
 
 ---
 
@@ -95,7 +97,7 @@ region 对 R2 固定写 `auto`。见 `R2Storage.presign_put`。
 这次 **完全信任前端申报**：
 
 - `presign` 不读桶。
-- `complete` 也不读桶、不核对真实大小、不删除对象。
+- `complete` 只按 `object_key` 签发 GET，不读对象、不核对真实大小、不删除对象。没上传过的键也会拿到 URL，MinerU 去拉时才会失败。
 - 预签名 PUT 本身也无法在签名里强制「最大 100MB」（那是 S3 POST Policy 的能力，本次不用）。
 
 代价：一个恶意或出错的客户端可以先用合法 size 拿到 URL，再上传更大的文件。产品上先接受。以后要补，只需要在 `complete` 里加 `HeadObject`（以及可选的删除），**不必改 presign 的请求体**。
@@ -124,7 +126,7 @@ R2_KEY_PREFIX=knowledge-base
 
 读取逻辑在 `src/memora_agent/core/config.py` 的 `load_r2_config()`，走现成的 `get_secret()`：先看进程环境变量，再看项目根目录 `.env`。空字符串当成「没填」。
 
-四个值没填齐时，**进程能启动**，校验单测也能跑；只有调用 `presign` 才会返回 HTTP 500，提示去填占位。这是有意的：不要让缺 R2 配置把整个 Agent 服务拖死。
+四个值没填齐时，**进程能启动**，校验单测也能跑；只有调用 `presign` 或 `complete` 才会返回 HTTP 500，提示去填占位。这是有意的：不要让缺 R2 配置把整个 Agent 服务拖死。
 
 这些值不写进 `config/models.toml`。TOML 是模型清单，和对象存储密钥不是一类东西，混在一起既难审阅，也更容易被提交。
 
@@ -153,7 +155,7 @@ R2_KEY_PREFIX=knowledge-base
 
 2. `src/memora_agent/api/files/files.py`  
    薄路由。`presign`：先 `validate_declaration`，再 `R2Storage.presign_put`。失败是 400，缺配置是 500。  
-   `complete`：把四个字段收成 `FileInfo` 返回。函数里有「以后入库加在这里」的注释。
+   `complete`：用申报的 `object_key` 调 `presign_get`，返回申报四字段加上 `download_url` / `expires_in`。不读对象字节。这个 URL 可以直接传给 `MinerULoader(source=url)`。
 
 3. `src/memora_agent/schema/files.py`  
    `PresignRequest` / `CompleteRequest` / `FileInfo` / `PresignResponse`。缺字段由 Pydantic / FastAPI 直接 422。
@@ -162,7 +164,7 @@ R2_KEY_PREFIX=knowledge-base
    纯函数，不碰网络。单测在 `tests/storage/test_validate.py`。
 
 5. `src/memora_agent/storage/r2.py`  
-   唯一和 boto3 打交道的地方。构造客户端、拼 endpoint、签发。测试用假客户端注入，不连真实 R2。
+   唯一和 boto3 打交道的地方。构造客户端、拼 endpoint、签发 PUT / GET。测试用假客户端注入，不连真实 R2。
 
 6. `src/memora_agent/core/config.py`  
    `R2Config` + `load_r2_config()`。看它如何把空值收成 `None`，以及 `endpoint_url` 怎么拼。
@@ -174,18 +176,18 @@ R2_KEY_PREFIX=knowledge-base
 
 ## 8. 以后加数据库，只改一处
 
-`POST /files/complete` 已经是「提交」语义：前端说「我传完了」，后端收下这份元数据。
+`POST /files/complete` 已经是「提交」语义：前端说「我传完了」，后端收下这份元数据，并签发一份短时可读 URL。
 
-现在它只 return。以后有库时，在 `complete` 里、`return FileInfo(...)` **之前** 插入一行即可，例如：
+现在它会 return `FileInfo`（含 `download_url`）。以后有库时，在 `complete` 里、`return FileInfo(...)` **之前** 插入一行即可，例如：
 
 - `object_key`
 - `filename`
 - `content_type`
 - `size`
 
-协议不用改，前端不用改，`presign` 不用改。不要先做内存伪库，重启即丢，还会和真库打架。
+`presign` 不用改。不要先做内存伪库，重启即丢，还会和真库打架。
 
-如果以后还要「确认桶里真有这个对象」，也是加在 `complete`：`HeadObject` → 不一致就 4xx（可选再 `DeleteObject`）。同样不必改第一步。
+`download_url` 的用途是交给 MinerU 这类按 HTTPS 拉文件的加载器，而不是让本服务先把对象读进内存。如果以后还要「确认桶里真有这个对象」，也是加在 `complete`：`HeadObject` → 不一致就 4xx（可选再 `DeleteObject`）。同样不必改第一步。
 
 ---
 

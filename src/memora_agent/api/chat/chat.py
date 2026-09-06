@@ -1,12 +1,22 @@
+from pathlib import Path
+
+import dotenv
 from fastapi import APIRouter
 from langchain_core.messages import HumanMessage,AIMessage
 
+from memora_agent.core.config import load_mineru_config
 from memora_agent.schema.chat import ChatRequest
 from memora_agent.tools.tools import Tools
 from memora_agent.agent.agent import Agent
 from memora_agent.schema.config import AgentConfig
 from memora_agent.rule.rule import Rule
 from memora_agent.intent_classify.intent_classify import IntentClassify
+from langchain_mineru import MinerULoader
+from langchain_core.documents import Document
+from langchain_text_splitters import (
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
 
 chat_router = APIRouter(
     prefix="/chat",
@@ -86,3 +96,47 @@ async def rule(request: ChatRequest):
 async def intent(request: ChatRequest):
     intent = await IntentClassify().get_intent(request.message)
     return {"message": "hello world", "intent": intent}
+@chat_router.get("/test-mineru")
+def test_mineru():
+    mineru_config = load_mineru_config()
+    if mineru_config.api_key is None:
+        return {
+            "message":"mineru api key 不存在"
+        }
+    loader = MinerULoader(
+        source=str(Path(__file__).with_name("公司员工考核制度.pdf")),
+        mode="precision", 
+        token=mineru_config.api_key
+    )
+    docs = loader.load()
+
+    text_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[
+        ("#", "h1"),
+        ("##", "h2"),
+        ("###", "h3"),
+    ])
+    sessions:list[Document] = []
+
+    for doc in docs:
+        sessions.extend(text_splitter.split_text(doc.page_content))
+    for session in sessions:
+        session.metadata = {**session.metadata, "source": docs[0].metadata.get("source", "")}
+    
+    recursive_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500, 
+        chunk_overlap=50,
+        separators=["\n\n", "\n", "。", "；",";",". ", " ", ""]
+    )
+    final_docs:list[Document] = []
+
+    for session in sessions:
+        if len(session.page_content) > 500:
+            final_docs.extend(recursive_splitter.split_documents([session]))
+        else:
+            final_docs.append(session)
+
+    print("处理后的文档",final_docs)
+
+    return {
+        "message":"hello world"
+    }

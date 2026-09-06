@@ -19,6 +19,8 @@ class FileInfo(BaseModel):
     filename: str
     content_type: str
     size: int
+    download_url: str
+    expires_in: int
 
 
 class PresignResponse(BaseModel):
