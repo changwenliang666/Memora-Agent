@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     rabbitmq_port: int = 5672
     rabbitmq_user: str = "memora"
     rabbitmq_password: str | None = None
+    qdrant_host: str = "127.0.0.1"
+    qdrant_port: int = 6333
     r2_account_id: str | None = None
     r2_access_key_id: str | None = None
     r2_secret_access_key: str | None = None
@@ -151,6 +153,8 @@ def get_settings() -> Settings:
             "rabbitmq_port": _int_or_default(env_map.get("RABBITMQ_PORT"), 5672),
             "rabbitmq_user": _blank_to_none(env_map.get("RABBITMQ_USER")) or "memora",
             "rabbitmq_password": _blank_to_none(env_map.get("RABBITMQ_PASSWORD")),
+            "qdrant_host": _blank_to_none(env_map.get("QDRANT_HOST")) or "127.0.0.1",
+            "qdrant_port": _int_or_default(env_map.get("QDRANT_PORT"), 6333),
             "r2_account_id": _blank_to_none(env_map.get("R2_ACCOUNT_ID")),
             "r2_access_key_id": _blank_to_none(env_map.get("R2_ACCESS_KEY_ID")),
             "r2_secret_access_key": _blank_to_none(env_map.get("R2_SECRET_ACCESS_KEY")),

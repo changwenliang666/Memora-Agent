@@ -2,7 +2,7 @@
 
 ## Purpose
 
-让开发者在本机用一条 Compose 命令拉起 MySQL、Redis 和 RabbitMQ，供仍跑在宿主机上的应用连接，而不把应用进程放进容器。
+让开发者在本机用一条 Compose 命令拉起 MySQL、Redis、RabbitMQ 和 Qdrant，供仍跑在宿主机上的应用连接，而不把应用进程放进容器。
 
 ## Requirements
 

@@ -89,3 +89,19 @@ def test_model_catalog_loads_from_toml(isolated_env: Path) -> None:
     assert settings.mysql_host == "127.0.0.1"
     assert settings.redis_port == 6379
     assert settings.rabbitmq_port == 5672
+    assert settings.qdrant_host == "127.0.0.1"
+    assert settings.qdrant_port == 6333
+
+
+def test_process_env_overrides_qdrant_dotenv(
+    isolated_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    isolated_env.write_text("QDRANT_HOST=from-file\nQDRANT_PORT=6333\n")
+    monkeypatch.setenv("QDRANT_HOST", "from-process")
+    monkeypatch.setenv("QDRANT_PORT", "6334")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.qdrant_host == "from-process"
+    assert settings.qdrant_port == 6334

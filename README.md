@@ -14,7 +14,7 @@
 | Agent | 自研循环 + LangChain | `bind_tools` + `ainvoke` 工具调用 |
 | 模型接入 | langchain-ollama / langchain-openai | 本地 Ollama 与 OpenAI 兼容 API（如 DeepSeek） |
 | 配置 | pydantic-settings + TOML | `get_settings()` 读环境变量；TOML 只放模型清单 |
-| 中间件 | Docker Compose | 开发用 MySQL / Redis / RabbitMQ，应用仍本机运行 |
+| 中间件 | Docker Compose | 开发用 MySQL / Redis / RabbitMQ / Qdrant，应用仍本机运行 |
 | 运行时 | Python ≥ 3.14 | 见 `.python-version` |
 
 ## 特性
@@ -26,7 +26,7 @@
 - **内置示例工具**：查询天气（模拟）、获取当前时间
 - **服务化接入**：FastAPI 暴露 REST API
 - **统一配置**：密钥、中间件地址和模型清单走同一个 `get_settings()` 入口
-- **开发中间件**：`docker compose up -d` 只起 MySQL / Redis / RabbitMQ，不把 FastAPI 放进容器
+- **开发中间件**：`docker compose up -d` 只起 MySQL / Redis / RabbitMQ / Qdrant，不把 FastAPI 放进容器
 
 ## 快速开始
 
@@ -41,7 +41,7 @@ uv sync
 cp .example.env .env
 # 按需填写在线模型的 API Key 和 R2 / MinerU
 
-# 先起 MySQL / Redis / RabbitMQ（应用仍在本机跑）
+# 先起 MySQL / Redis / RabbitMQ / Qdrant（应用仍在本机跑）
 docker compose up -d
 ```
 
@@ -179,7 +179,7 @@ Memora-Agent/
 │   └── rule/                       # 规则拦截
 ├── docs/
 │   └── r2-file-upload.md           # 文件直传教学文档
-├── compose.yaml                    # 开发中间件：MySQL / Redis / RabbitMQ
+├── compose.yaml                    # 开发中间件：MySQL / Redis / RabbitMQ / Qdrant
 ├── .example.env                    # 全量环境占位（中间件 + 密钥）
 ├── pyproject.toml
 ├── uv.lock
