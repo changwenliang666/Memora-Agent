@@ -86,3 +86,6 @@ class AgentConfig(BaseModel):
     human_input_message: str = Field(default="", min_length=1, max_length=500)
     stream: bool = Field(default=False)
     max_round: int = Field(default=10)
+
+class FeishuConfig(BaseModel):
+    webhook_url: str

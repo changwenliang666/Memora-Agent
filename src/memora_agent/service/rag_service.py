@@ -2,13 +2,26 @@ from langchain_core.documents import Document
 from langchain_mineru import MinerULoader
 from langchain_text_splitters import (MarkdownHeaderTextSplitter,RecursiveCharacterTextSplitter)
 from memora_agent.core.config import config
-
+from memora_agent.service.embedding_service import EmbeddingService
+from memora_agent.service.qdrant_service import qdrantService
+from qdrant_client.models import PointStruct
+import uuid
+from memora_agent.service.webhook_service import WebhookService
 class RagService:
     def __init__(self):
         pass
+    def build_points_data(documents:list[Document],embedding:list[float]) -> list[PointStruct]:
+        points = []
+        for document,embedding in zip(documents,embedding):
+            points.append(PointStruct(
+                id=uuid.uuid4(),
+                vector=embedding,
+                payload= {**document.metadata, "content": document.page_content}
+            ))
+        return points
     # 离线建库方法
     @staticmethod
-    def build_knowledge_base(file_url:str,object_key:str,filename:str):
+    async def build_knowledge_base(file_url:str,object_key:str,filename:str):
         mineru_config = config.mineru
 
         sessions:list[Document] = []
@@ -49,4 +62,11 @@ class RagService:
                 final_docs.extend(recursive_splitter.split_documents([session]))
             else:
                 final_docs.append(session)
-        print("处理后的文档",final_docs)
+        # 生成向量数据
+        embedding = await EmbeddingService().get_batch_embedding(final_docs)
+        # 构建点数据
+        points = RagService.build_points_data(final_docs,embedding)
+        # 插入 Qdrant 数据
+        qdrantService.upsert(points)
+        print("✅ 文档建库成功")
+        WebhookService.send_knowledge_base_build_success(filename)

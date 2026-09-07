@@ -16,7 +16,10 @@ from langchain_text_splitters import (
     MarkdownHeaderTextSplitter,
     RecursiveCharacterTextSplitter,
 )
-from memora_agent.core.provider import LLMProvider
+from memora_agent.service.embedding_service import EmbeddingService
+from memora_agent.service.qdrant_service import QdrantService
+from memora_agent.service.webhook_service import WebhookService
+
 chat_router = APIRouter(
     prefix="/chat",
     tags=["chat"],
@@ -96,7 +99,7 @@ async def intent(request: ChatRequest):
     intent = await IntentClassify().get_intent(request.message)
     return {"message": "hello world", "intent": intent}
 @chat_router.get("/test-mineru")
-def test_mineru():
+async def test_mineru():
     mineru_config = config.mineru
     if mineru_config.api_key is None:
         return {
@@ -134,19 +137,29 @@ def test_mineru():
         else:
             final_docs.append(session)
 
-    print("处理后的文档",final_docs)
+    embedding = await EmbeddingService().get_batch_embedding(final_docs)
+    print(embedding)
 
     return {
         "message":"hello world"
     }
 @chat_router.post("/test-embeddings")
 def test_embeddings(request: ChatRequest):
-    provider = LLMProvider()
-    embeddings = provider.get_embeddings("ollama", "mxbai-embed-large:latest")
-    text = request.message
-    embedding = embeddings.embed_query(text)
-    print(embedding)
+    embedding = EmbeddingService().embed_query(request.message)
     return {
         "message":"hello world",
         "embedding":embedding
+    }
+@chat_router.post("/test-qdrant")
+async def test_qdrant():
+    qdrant = QdrantService()
+    return {
+        "message":"hello world",
+        "qdrant":qdrant.client.get_collections()
+    }
+@chat_router.post("/test-webhook")
+async def test_webhook():
+    WebhookService.send_knowledge_base_build_success()
+    return {
+        "message":"hello world"
     }

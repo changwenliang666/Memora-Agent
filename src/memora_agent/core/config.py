@@ -12,6 +12,7 @@ from memora_agent.schema.config import (
     R2Config,
     RabbitMQConfig,
     RedisConfig,
+    FeishuConfig,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -37,7 +38,7 @@ class Config:
         self.r2 = self.load_r2()
         self.mineru = self.load_mineru()
         self.llm = self.load_llm()
-
+        self.feishu = self.load_feishu()
     def load_env(self) -> dict[str, str | None]:
         values = dict(dotenv_values(self.env_file))
         values.update(os.environ)
@@ -105,6 +106,10 @@ class Config:
         for name, provider in raw.items():
             providers[name] = ProviderConfig.model_validate(provider)
         return providers
+    def load_feishu(self) -> FeishuConfig:
+        return FeishuConfig(
+            webhook_url=self.get("FEISHU_WEBHOOK_URL"),
+        )
 
 
 config = Config()
