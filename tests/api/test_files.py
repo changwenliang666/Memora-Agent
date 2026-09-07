@@ -206,6 +206,10 @@ def test_complete_returns_declared_file_info_and_download_url(monkeypatch) -> No
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
+    monkeypatch.setattr(
+        "memora_agent.api.files.files.RagService.build_knowledge_base",
+        lambda *args: None,
+    )
     client = TestClient(app)
     payload = {
         "object_key": "abc/notes.pdf",

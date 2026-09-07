@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from langchain_core.messages import HumanMessage,AIMessage
 
-from memora_agent.core.config import get_settings
+from memora_agent.core.config import config
 from memora_agent.schema.chat import ChatRequest
 from memora_agent.tools.tools import Tools
 from memora_agent.agent.agent import Agent
@@ -16,7 +16,7 @@ from langchain_text_splitters import (
     MarkdownHeaderTextSplitter,
     RecursiveCharacterTextSplitter,
 )
-
+from memora_agent.core.provider import LLMProvider
 chat_router = APIRouter(
     prefix="/chat",
     tags=["chat"],
@@ -97,7 +97,7 @@ async def intent(request: ChatRequest):
     return {"message": "hello world", "intent": intent}
 @chat_router.get("/test-mineru")
 def test_mineru():
-    mineru_config = get_settings().mineru
+    mineru_config = config.mineru
     if mineru_config.api_key is None:
         return {
             "message":"mineru api key 不存在"
@@ -138,4 +138,15 @@ def test_mineru():
 
     return {
         "message":"hello world"
+    }
+@chat_router.post("/test-embeddings")
+def test_embeddings(request: ChatRequest):
+    provider = LLMProvider()
+    embeddings = provider.get_embeddings("ollama", "mxbai-embed-large:latest")
+    text = request.message
+    embedding = embeddings.embed_query(text)
+    print(embedding)
+    return {
+        "message":"hello world",
+        "embedding":embedding
     }

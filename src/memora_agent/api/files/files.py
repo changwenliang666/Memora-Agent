@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from memora_agent.core.config import get_settings
+from memora_agent.core.config import config
 from memora_agent.schema.files import (
     CompleteRequest,
     FileInfo,
@@ -19,7 +19,7 @@ files_router = APIRouter(
 
 
 def get_r2_storage() -> R2Storage:
-    return R2Storage(get_settings().r2)
+    return R2Storage(config.r2)
 
 
 @files_router.post("/presign", response_model=PresignResponse)

@@ -124,7 +124,7 @@ R2_KEY_PREFIX=knowledge-base
 
 `R2_KEY_PREFIX` 可选。R2 没有真正的文件夹，前缀就是控制台里看到的目录。不填则对象直接落在桶根下。
 
-读取逻辑在 `src/memora_agent/core/config.py` 的 `get_settings()`：进程环境覆盖项目根 `.env`，空字符串当成「没填」。R2 字段挂在同一份 snapshot 的 `settings.r2` 上，不再单独 `load_r2_config()`。
+读取逻辑在 `src/memora_agent/core/config.py` 的 `Config` 类：构造时只读取一次 `.env`，再用进程环境覆盖同名值。`load_r2()` 明确读取五个 R2 环境变量并生成 `config.r2`，空字符串当成“没填”。
 
 四个值没填齐时，**进程能启动**，校验单测也能跑；只有调用 `presign` 或 `complete` 才会返回 HTTP 500，提示去填占位。这是有意的：不要让缺 R2 配置把整个 Agent 服务拖死。
 
@@ -167,7 +167,7 @@ R2_KEY_PREFIX=knowledge-base
    唯一和 boto3 打交道的地方。构造客户端、拼 endpoint、签发 PUT / GET。测试用假客户端注入，不连真实 R2。
 
 6. `src/memora_agent/core/config.py`  
-   `get_settings()` 一次给出模型清单、R2、MinerU 和中间件地址。`settings.r2` 把空值收成 `None`，并拼 `endpoint_url`。
+   `Config` 先合并一次环境，再通过 `load_r2()`、`load_mineru()`、`load_mysql()`、`load_llm()` 等方法生成分组配置。调用方直接读取 `config.r2`；它把空值收成 `None`，并拼出 `endpoint_url`。
 
 7. `tests/api/test_files.py`  
    用 FastAPI `TestClient` 打两个接口。签发被 mock 掉，所以 CI / 本地没填 R2 也能绿。

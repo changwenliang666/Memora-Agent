@@ -1,4 +1,4 @@
-from memora_agent.core.config import R2Config
+from memora_agent.schema.config import R2Config
 from memora_agent.storage.r2 import (
     PRESIGN_EXPIRES_IN,
     PRESIGN_GET_EXPIRES_IN,

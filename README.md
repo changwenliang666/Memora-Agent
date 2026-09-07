@@ -13,7 +13,7 @@
 | API 服务 | FastAPI | HTTP 接口与 OpenAPI 文档 |
 | Agent | 自研循环 + LangChain | `bind_tools` + `ainvoke` 工具调用 |
 | 模型接入 | langchain-ollama / langchain-openai | 本地 Ollama 与 OpenAI 兼容 API（如 DeepSeek） |
-| 配置 | pydantic-settings + TOML | `get_settings()` 读环境变量；TOML 只放模型清单 |
+| 配置 | dotenv + TOML | `Config` 按服务加载 `.env`；TOML 只放模型清单 |
 | 中间件 | Docker Compose | 开发用 MySQL / Redis / RabbitMQ / Qdrant，应用仍本机运行 |
 | 运行时 | Python ≥ 3.14 | 见 `.python-version` |
 
@@ -25,7 +25,7 @@
 - **工具调用循环**：最多 `max_round` 轮；同步 / 异步工具统一走 `ainvoke`
 - **内置示例工具**：查询天气（模拟）、获取当前时间
 - **服务化接入**：FastAPI 暴露 REST API
-- **统一配置**：密钥、中间件地址和模型清单走同一个 `get_settings()` 入口
+- **统一配置**：一个 `Config` 类按 MySQL、Redis、R2、MinerU、LLM 分组加载
 - **开发中间件**：`docker compose up -d` 只起 MySQL / Redis / RabbitMQ / Qdrant，不把 FastAPI 放进容器
 
 ## 快速开始
@@ -45,27 +45,36 @@ cp .example.env .env
 docker compose up -d
 ```
 
-运行时配置只走 `get_settings()`：进程环境覆盖项目根 `.env`，模型清单仍在 `config/models.toml`。Provider 保存连接信息，`models`
-数组保存该 Provider 下可选的多个模型。`base_url` 按配置原样传给客户端，不会把 `localhost` 改成 `127.0.0.1`。
+运行时配置只走 `core.config.config`。`Config` 构造时只读取一次项目根 `.env`，再用进程环境覆盖同名值，然后通过 `load_mysql()`、`load_redis()`、`load_r2()`、`load_mineru()`、`load_llm()` 等方法生成分组配置：
 
-```toml
-[providers.ollama]
-base_url = "http://127.0.0.1:11434"
-temperature = 0.7
+```python
+from memora_agent.core.config import config
 
-[[providers.ollama.models]]
-name = "qwen3.5:4b-mlx"
-
-[providers.openai]
-base_url = "https://api.deepseek.com"
-api_key_env = "DEEPSEEK_API_KEY"
-
-[[providers.openai.models]]
-name = "deepseek-chat"
+config.mysql.host
+config.r2.bucket_name
+config.mineru.api_key
+config.llm["ollama"]
 ```
 
-Provider 级的 `think` 和 `temperature` 是默认值，模型条目中的同名参数可覆盖它们。
-在线密钥不写入 TOML，只在 `.env` 中配置：
+模型清单在 `config/models.toml`。每个供应商一张表，`models` 是聊天模型名列表，`embed_models` 是向量模型名。`base_url` 按配置原样传给客户端。
+
+```toml
+[ollama]
+base_url = "http://127.0.0.1:11434"
+think = false
+temperature = 0.7
+models = ["qwen3.5:4b-mlx", "qwen3.5:2b"]
+embed_models = ["mxbai-embed-large:latest"]
+
+[openai]
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+think = false
+temperature = 0.7
+models = ["deepseek-v4-flash", "deepseek-chat"]
+```
+
+`think` 和 `temperature` 是供应商级默认值。在线密钥不写入 TOML，只在 `.env` 中配置：
 
 ```env
 DEEPSEEK_API_KEY=sk-your-key
@@ -145,7 +154,7 @@ Memora-Agent/
 │   │   └── files/
 │   │       └── files.py            # /files/presign、/files/complete
 │   ├── core/
-│   │   ├── config.py               # get_settings()：环境变量 + TOML
+│   │   ├── config.py               # Config：按服务加载环境变量与 TOML
 │   │   └── provider.py             # 按 provider_type + model_name 构造 Chat 模型
 │   ├── intent_classify/
 │   │   ├── intent_classify.py      # Few-shot 意图分类
@@ -171,7 +180,6 @@ Memora-Agent/
 │   ├── graph/                      # 预留：图编排
 │   └── memory/                     # 预留：记忆
 ├── tests/
-│   ├── conftest.py                 # 隔离 .env，清空 Settings 缓存
 │   ├── api/                        # /files、CORS
 │   ├── core/                       # 配置加载与模型选择
 │   ├── schema/                     # 请求体校验
@@ -195,7 +203,7 @@ Memora-Agent/
 | `service.RagService` | MinerU 拉文件并按标题 / 长度切分 |
 | `storage` | 文件申报校验与 boto3 预签名 |
 | `agent.Agent` | 绑定工具、构建系统提示词、按 `tool_calls` 调用工具并回填历史 |
-| `core.get_settings` | 统一读取环境变量与 TOML 模型清单 |
+| `core.config` | 单次读取环境，并按服务分组加载运行时配置与模型清单 |
 | `core.LLMProvider` | 根据 `provider_type + model_name` 返回对应 Chat 模型 |
 | `intent_classify.IntentClassify` | 用小模型做 Few-shot 意图分类，低置信度拒绝回答 |
 | `rule.Rule` | 同时命中主题词和动作词时拦截输入 |
@@ -228,7 +236,7 @@ uv run uvicorn memora_agent.main:app --reload
 uv run pytest
 ```
 
-新增模型时，只需在 `config/models.toml` 对应 Provider 下增加 `[[providers.<type>.models]]` 条目。
+新增聊天模型时，只需把名字加进 `config/models.toml` 对应供应商的 `models` 列表。
 调用 `/chat/agent` 时传入 `"ollama"` 或 `"openai"` 以及对应模型名即可切换。
 
 ## License

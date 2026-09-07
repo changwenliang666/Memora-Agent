@@ -1,24 +1,13 @@
-[providers.ollama]
+[ollama]
 base_url = "http://127.0.0.1:11434"
 think = false
 temperature = 0.7
+models = ["qwen3.5:4b-mlx", "qwen3.5:2b"]
+embed_models = ["mxbai-embed-large:latest"]
 
-[[providers.ollama.models]]
-name = "qwen3.5:4b-mlx"
-temperature = 0.2
-
-[[providers.ollama.models]]
-name = "qwen3.5:2b"
-temperature = 0.1
-
-[providers.openai]
+[openai]
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
 think = false
 temperature = 0.7
-
-[[providers.openai.models]]
-name = "deepseek-v4-flash"
-
-[[providers.openai.models]]
-name = "deepseek-chat"
+models = ["deepseek-v4-flash", "deepseek-chat"]

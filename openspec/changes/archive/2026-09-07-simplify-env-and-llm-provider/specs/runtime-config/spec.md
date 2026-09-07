@@ -1,10 +1,4 @@
-# runtime-config Specification
-
-## Purpose
-
-让进程用一个配置入口同时拿到模型清单、外部密钥和中间件地址，避免 TOML 与环境变量各走一套读取逻辑。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Runtime configuration has a single load entry
 
@@ -48,21 +42,3 @@ The system SHALL parse the project-root `.env` file once per configuration snaps
 
 - **WHEN** a provider table lists embedding model names under `embed_models`
 - **THEN** those names are absent from that provider's `models` list in the snapshot
-
-### Requirement: Example environment documents every placeholder
-
-The committed example environment file SHALL list a placeholder for every runtime name the snapshot reads from the environment, including MySQL, Redis, RabbitMQ, R2, MinerU, and online-model API keys. The example file MUST NOT contain real secret values.
-
-#### Scenario: New middleware names are present
-
-- **WHEN** a developer copies the example environment file
-- **THEN** the copy includes names for MySQL, Redis, RabbitMQ, MinerU, R2, and the configured online-model API key
-
-### Requirement: Model provider URLs are used as configured
-
-The system SHALL pass each provider `base_url` to the chat client as written in the model catalog. The system MUST NOT rewrite `localhost` to `127.0.0.1`.
-
-#### Scenario: Localhost in the catalog is unchanged
-
-- **WHEN** the ollama provider `base_url` is `http://localhost:11434`
-- **THEN** the constructed ollama client uses `http://localhost:11434`

@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import boto3
 
-from memora_agent.core.config import R2Config
+from memora_agent.schema.config import R2Config
 
 PRESIGN_EXPIRES_IN = 900
 PRESIGN_GET_EXPIRES_IN = 3600

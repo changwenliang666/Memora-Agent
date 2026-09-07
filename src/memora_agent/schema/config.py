@@ -8,10 +8,58 @@ from memora_agent.schema.tools import ToolsDictList
 ProviderType = Literal["ollama", "openai"]
 
 
-class ModelConfig(BaseModel):
-    name: str = Field(min_length=1)
-    think: bool | None = None
-    temperature: float | None = Field(default=None, ge=0, le=2)
+class MysqlConfig(BaseModel):
+    host: str
+    port: int
+    user: str
+    password: str | None = None
+    database: str
+
+
+class RedisConfig(BaseModel):
+    host: str
+    port: int
+    password: str | None = None
+
+
+class RabbitMQConfig(BaseModel):
+    host: str
+    port: int
+    user: str
+    password: str | None = None
+
+
+class QdrantConfig(BaseModel):
+    host: str
+    port: int
+
+
+class R2Config(BaseModel):
+    account_id: str | None = None
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    bucket_name: str | None = None
+    key_prefix: str | None = None
+
+    @property
+    def endpoint_url(self) -> str | None:
+        if self.account_id is None:
+            return None
+        return f"https://{self.account_id}.r2.cloudflarestorage.com"
+
+    def is_complete(self) -> bool:
+        return all(
+            (
+                self.account_id,
+                self.access_key_id,
+                self.secret_access_key,
+                self.bucket_name,
+            )
+        )
+
+
+class MineruConfig(BaseModel):
+    api_key: str | None = None
 
 
 class ProviderConfig(BaseModel):
@@ -19,7 +67,8 @@ class ProviderConfig(BaseModel):
     api_key_env: str | None = None
     think: bool = False
     temperature: float = Field(default=0.7, ge=0, le=2)
-    models: list[ModelConfig] = Field(min_length=1)
+    models: list[str] = Field(min_length=1)
+    embed_models: list[str] = Field(default_factory=list)
 
 
 class AgentConfig(BaseModel):
