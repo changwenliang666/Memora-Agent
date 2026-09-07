@@ -1,5 +1,5 @@
 [providers.ollama]
-base_url = "http://localhost:11434"
+base_url = "http://127.0.0.1:11434"
 think = false
 temperature = 0.7
 

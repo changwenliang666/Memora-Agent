@@ -1,10 +1,9 @@
 from pathlib import Path
 
-import dotenv
 from fastapi import APIRouter
 from langchain_core.messages import HumanMessage,AIMessage
 
-from memora_agent.core.config import load_mineru_config
+from memora_agent.core.config import get_settings
 from memora_agent.schema.chat import ChatRequest
 from memora_agent.tools.tools import Tools
 from memora_agent.agent.agent import Agent
@@ -98,7 +97,7 @@ async def intent(request: ChatRequest):
     return {"message": "hello world", "intent": intent}
 @chat_router.get("/test-mineru")
 def test_mineru():
-    mineru_config = load_mineru_config()
+    mineru_config = get_settings().mineru
     if mineru_config.api_key is None:
         return {
             "message":"mineru api key 不存在"

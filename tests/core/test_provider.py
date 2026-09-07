@@ -1,7 +1,7 @@
 import pytest
 
 import memora_agent.core.provider as provider_module
-from memora_agent.core.config import LLMProviderConfig, llm_provider_config
+from memora_agent.core.config import LLMProviderConfig, get_settings
 from memora_agent.core.provider import LLMProvider
 
 
@@ -29,11 +29,12 @@ def make_config() -> LLMProviderConfig:
 
 
 def test_toml_loads_multiple_models_per_provider() -> None:
+    catalog = get_settings().llm
     ollama_models = [
-        model.name for model in llm_provider_config.providers["ollama"].models
+        model.name for model in catalog.providers["ollama"].models
     ]
     openai_models = [
-        model.name for model in llm_provider_config.providers["openai"].models
+        model.name for model in catalog.providers["openai"].models
     ]
     assert ollama_models == ["qwen3.5:4b-mlx", "qwen3.5:2b"]
     assert openai_models == ["deepseek-v4-flash", "deepseek-chat"]
@@ -57,7 +58,7 @@ def test_ollama_model_uses_model_override_and_provider_defaults(
     assert captured[0]["temperature"] == 0.1
     assert captured[1]["model"] == "large"
     assert captured[1]["temperature"] == 0.7
-    assert captured[1]["base_url"] == "http://127.0.0.1:11434"
+    assert captured[1]["base_url"] == "http://localhost:11434"
 
 
 def test_openai_model_uses_configured_secret(

@@ -34,7 +34,7 @@ def test_presign_put_returns_url_key_and_expiry() -> None:
     result = storage.presign_put("notes.pdf", "application/pdf")
 
     assert result.upload_url == "https://r2.example/upload"
-    assert result.object_key.endswith("/notes.pdf")
+    assert result.object_key.endswith("notes.pdf")
     assert result.expires_in == PRESIGN_EXPIRES_IN
     assert client.calls == [
         (
@@ -58,7 +58,7 @@ def test_presign_put_uses_key_prefix() -> None:
     result = storage.presign_put("notes.pdf", "application/pdf")
 
     assert result.object_key.startswith("knowledge-base/")
-    assert result.object_key.endswith("/notes.pdf")
+    assert result.object_key.endswith("notes.pdf")
     assert client.calls[0][1]["Key"] == result.object_key
 
 

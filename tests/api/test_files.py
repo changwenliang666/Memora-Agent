@@ -217,7 +217,7 @@ def test_complete_returns_declared_file_info_and_download_url(monkeypatch) -> No
     response = client.post("/files/complete", json=payload)
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["data"]
     assert body["object_key"] == payload["object_key"]
     assert body["filename"] == payload["filename"]
     assert body["content_type"] == payload["content_type"]

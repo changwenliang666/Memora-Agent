@@ -2,13 +2,13 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
-from memora_agent.core.config import LLMProviderConfig, get_secret, llm_provider_config
+from memora_agent.core.config import LLMProviderConfig, get_settings
 from memora_agent.schema.config import ModelConfig, ProviderConfig, ProviderType
 
 
 class LLMProvider:
     def __init__(self, config: LLMProviderConfig | None = None):
-        self.config = config or llm_provider_config
+        self.config = config or get_settings().llm
 
     def get_model(self, provider_type: ProviderType, model_name: str) -> BaseChatModel:
         provider = self._get_provider(provider_type)
@@ -20,7 +20,7 @@ class LLMProvider:
 
         if provider_type == "ollama":
             return ChatOllama(
-                base_url=provider.base_url.replace("localhost", "127.0.0.1"),
+                base_url=provider.base_url,
                 model=model.name,
                 reasoning=think,
                 temperature=temperature,
@@ -30,7 +30,7 @@ class LLMProvider:
         if provider_type == "openai":
             if not provider.api_key_env:
                 raise ValueError("OpenAI Provider 未配置 api_key_env")
-            api_key = get_secret(provider.api_key_env)
+            api_key = get_settings().api_key(provider.api_key_env)
             if not api_key:
                 raise ValueError(f"环境变量 {provider.api_key_env} 未配置或为空")
             return ChatOpenAI(

@@ -13,7 +13,8 @@
 | API 服务 | FastAPI | HTTP 接口与 OpenAPI 文档 |
 | Agent | 自研循环 + LangChain | `bind_tools` + `ainvoke` 工具调用 |
 | 模型接入 | langchain-ollama / langchain-openai | 本地 Ollama 与 OpenAI 兼容 API（如 DeepSeek） |
-| 配置 | pydantic-settings + TOML | TOML 保存模型清单，`.env` 保存密钥 |
+| 配置 | pydantic-settings + TOML | `get_settings()` 读环境变量；TOML 只放模型清单 |
+| 中间件 | Docker Compose | 开发用 MySQL / Redis / RabbitMQ，应用仍本机运行 |
 | 运行时 | Python ≥ 3.14 | 见 `.python-version` |
 
 ## 特性
@@ -24,6 +25,8 @@
 - **工具调用循环**：最多 `max_round` 轮；同步 / 异步工具统一走 `ainvoke`
 - **内置示例工具**：查询天气（模拟）、获取当前时间
 - **服务化接入**：FastAPI 暴露 REST API
+- **统一配置**：密钥、中间件地址和模型清单走同一个 `get_settings()` 入口
+- **开发中间件**：`docker compose up -d` 只起 MySQL / Redis / RabbitMQ，不把 FastAPI 放进容器
 
 ## 快速开始
 
@@ -34,17 +37,20 @@ cd Memora-Agent
 # 安装依赖（推荐 uv；默认会安装 dev 组中的 uvicorn）
 uv sync
 
-# 配置环境变量
+# 配置环境变量（模板含中间件、MinerU、R2、在线模型密钥）
 cp .example.env .env
-# 按需填写在线模型的 API Key
+# 按需填写在线模型的 API Key 和 R2 / MinerU
+
+# 先起 MySQL / Redis / RabbitMQ（应用仍在本机跑）
+docker compose up -d
 ```
 
-模型清单位于 `config/models.toml`。Provider 保存连接信息，`models`
-数组保存该 Provider 下可选的多个模型：
+运行时配置只走 `get_settings()`：进程环境覆盖项目根 `.env`，模型清单仍在 `config/models.toml`。Provider 保存连接信息，`models`
+数组保存该 Provider 下可选的多个模型。`base_url` 按配置原样传给客户端，不会把 `localhost` 改成 `127.0.0.1`。
 
 ```toml
 [providers.ollama]
-base_url = "http://localhost:11434"
+base_url = "http://127.0.0.1:11434"
 temperature = 0.7
 
 [[providers.ollama.models]]
@@ -117,7 +123,7 @@ curl -X POST http://127.0.0.1:8000/chat/agent \
 | `POST` | `/chat/intent` | 可用 | 意图分类：`history` / `weather` / `other`，低置信度返回固定话术 |
 | `POST` | `/chat/stream` | 占位 | 流式接口尚未接上，目前返回占位 JSON |
 | `POST` | `/files/presign` | 可用 | 按申报校验类型 / 大小后，签发 R2 预签名 PUT 地址 |
-| `POST` | `/files/complete` | 可用 | 回传前端申报的上传信息；本次不读桶、不落库 |
+| `POST` | `/files/complete` | 可用 | 按 `object_key` 签发短时 GET，回传 `download_url`；后台切文档，不读桶、不落库 |
 
 请求体统一为 `ChatRequest`：必填 `message`。`/chat/agent` 还需要 `provider_type` 和 `model_name`。
 
@@ -139,7 +145,7 @@ Memora-Agent/
 │   │   └── files/
 │   │       └── files.py            # /files/presign、/files/complete
 │   ├── core/
-│   │   ├── config.py               # 加载 TOML 与 R2 环境变量
+│   │   ├── config.py               # get_settings()：环境变量 + TOML
 │   │   └── provider.py             # 按 provider_type + model_name 构造 Chat 模型
 │   ├── intent_classify/
 │   │   ├── intent_classify.py      # Few-shot 意图分类
@@ -152,7 +158,11 @@ Memora-Agent/
 │   │   ├── config.py               # 模型 / Provider / Agent 配置类型
 │   │   ├── files.py                # 文件直传请求 / 响应
 │   │   ├── intent.py               # 意图识别结果
+│   │   ├── response.py             # 统一响应包装
+│   │   ├── bizcode.py              # 业务状态码
 │   │   └── tools.py                # 工具列表与参数 Schema
+│   ├── service/
+│   │   └── rag_service.py          # 文档解析与切分（complete 后台任务）
 │   ├── storage/
 │   │   ├── r2.py                   # boto3 签发 R2 预签名 URL
 │   │   └── validate.py             # 文件类型与大小白名单
@@ -161,14 +171,16 @@ Memora-Agent/
 │   ├── graph/                      # 预留：图编排
 │   └── memory/                     # 预留：记忆
 ├── tests/
-│   ├── api/                        # /files 接口
+│   ├── conftest.py                 # 隔离 .env，清空 Settings 缓存
+│   ├── api/                        # /files、CORS
 │   ├── core/                       # 配置加载与模型选择
 │   ├── schema/                     # 请求体校验
 │   ├── storage/                    # R2 签发与文件申报校验
 │   └── rule/                       # 规则拦截
 ├── docs/
 │   └── r2-file-upload.md           # 文件直传教学文档
-├── .example.env                    # 在线模型 API Key 与 R2 占位
+├── compose.yaml                    # 开发中间件：MySQL / Redis / RabbitMQ
+├── .example.env                    # 全量环境占位（中间件 + 密钥）
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
@@ -179,10 +191,11 @@ Memora-Agent/
 | 模块 | 职责 |
 |------|------|
 | `api.chat` | 对外 HTTP 入口，把请求转给 Agent / Rule / IntentClassify |
-| `api.files` | 签发 R2 临时上传地址，并回传申报的文件信息 |
+| `api.files` | 签发 R2 临时上传 / 下载地址，complete 后触发后台切文档 |
+| `service.RagService` | MinerU 拉文件并按标题 / 长度切分 |
 | `storage` | 文件申报校验与 boto3 预签名 |
 | `agent.Agent` | 绑定工具、构建系统提示词、按 `tool_calls` 调用工具并回填历史 |
-| `core.LLMProviderConfig` | 从 TOML 读取 Provider 和模型清单 |
+| `core.get_settings` | 统一读取环境变量与 TOML 模型清单 |
 | `core.LLMProvider` | 根据 `provider_type + model_name` 返回对应 Chat 模型 |
 | `intent_classify.IntentClassify` | 用小模型做 Few-shot 意图分类，低置信度拒绝回答 |
 | `rule.Rule` | 同时命中主题词和动作词时拦截输入 |
@@ -210,6 +223,7 @@ Memora-Agent/
 
 ```bash
 uv sync --dev
+docker compose up -d
 uv run uvicorn memora_agent.main:app --reload
 uv run pytest
 ```

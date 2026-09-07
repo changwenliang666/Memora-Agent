@@ -1,7 +1,7 @@
 from langchain_core.documents import Document
 from langchain_mineru import MinerULoader
 from langchain_text_splitters import (MarkdownHeaderTextSplitter,RecursiveCharacterTextSplitter)
-from memora_agent.core.config import load_mineru_config
+from memora_agent.core.config import get_settings
 
 class RagService:
     def __init__(self):
@@ -9,7 +9,7 @@ class RagService:
     # 离线建库方法
     @staticmethod
     def build_knowledge_base(file_url:str,object_key:str,filename:str):
-        mineru_config = load_mineru_config()
+        mineru_config = get_settings().mineru
 
         sessions:list[Document] = []
         final_docs:list[Document] = []
