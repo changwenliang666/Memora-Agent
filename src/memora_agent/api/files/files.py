@@ -11,6 +11,7 @@ from memora_agent.storage.validate import FileDeclarationError, validate_declara
 from memora_agent.service.rag_service import RagService
 from fastapi import BackgroundTasks
 from memora_agent.schema.response import ResponseStructure
+from memora_agent.schema.bizcode import BizCode
 
 files_router = APIRouter(
     prefix="/files",
@@ -54,8 +55,11 @@ async def complete(request: CompleteRequest, background_tasks: BackgroundTasks):
     """
     try:
         result = get_r2_storage().presign_get(request.object_key)
-    except R2ConfigError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception:
+        return ResponseStructure[FileInfo](
+            code=BizCode.R2_CONFIG_ERROR.value,
+            message="获取文档信息失败",
+        )
 
     background_tasks.add_task(
         RagService.build_knowledge_base,

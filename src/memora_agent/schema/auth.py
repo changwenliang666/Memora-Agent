@@ -15,3 +15,4 @@ class LoginData(BaseModel):
     token: str
     user_id: int
     username: str
+    nickname: str

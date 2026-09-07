@@ -38,5 +38,5 @@ async def login(body: AuthCredentials) -> ResponseStructure[LoginData]:
     token = create_access_token(user.id, user.username)
     return ResponseStructure[LoginData](
         message="登录成功",
-        data=LoginData(token=token, user_id=user.id, username=user.username),
+        data=LoginData(token=token, user_id=user.id, username=user.username,nickname=user.nickname),
     )

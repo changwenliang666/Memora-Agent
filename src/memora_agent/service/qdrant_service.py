@@ -1,6 +1,6 @@
 from qdrant_client import QdrantClient
 from memora_agent.core.config import config
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, VectorParams, Filter
 
 
 class QdrantService:
@@ -41,5 +41,10 @@ class QdrantService:
         return self.client.upsert(
             collection_name=self.collection_name,
             points=points,
+        )
+    def delete(self):
+        return self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=Filter(),
         )
 qdrantService = QdrantService()
