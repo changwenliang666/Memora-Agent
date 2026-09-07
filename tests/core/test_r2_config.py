@@ -27,6 +27,8 @@ ENV_NAMES = (
     "R2_BUCKET_NAME",
     "R2_KEY_PREFIX",
     "MINERU_API_KEY",
+    "JWT_SECRET",
+    "JWT_EXPIRE_MINUTES",
 )
 
 
@@ -107,6 +109,8 @@ def test_config_exposes_named_groups_with_defaults(env_file: Path) -> None:
     assert config.rabbitmq.port == 5672
     assert config.qdrant.host == "127.0.0.1"
     assert config.qdrant.port == 6333
+    assert config.jwt.secret == "dev-only-change-me-jwt-secret-min-32b"
+    assert config.jwt.expire_minutes == 10080
 
 
 def test_model_catalog_loads_from_flat_toml(env_file: Path) -> None:

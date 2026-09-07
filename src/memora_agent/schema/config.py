@@ -58,6 +58,11 @@ class R2Config(BaseModel):
         )
 
 
+class JwtConfig(BaseModel):
+    secret: str
+    expire_minutes: int
+
+
 class MineruConfig(BaseModel):
     api_key: str | None = None
 
@@ -88,4 +93,4 @@ class AgentConfig(BaseModel):
     max_round: int = Field(default=10)
 
 class FeishuConfig(BaseModel):
-    webhook_url: str
+    webhook_url: str | None = None

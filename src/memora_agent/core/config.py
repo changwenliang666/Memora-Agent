@@ -5,6 +5,8 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 from memora_agent.schema.config import (
+    FeishuConfig,
+    JwtConfig,
     MineruConfig,
     MysqlConfig,
     ProviderConfig,
@@ -12,7 +14,6 @@ from memora_agent.schema.config import (
     R2Config,
     RabbitMQConfig,
     RedisConfig,
-    FeishuConfig,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -37,6 +38,7 @@ class Config:
         self.qdrant = self.load_qdrant()
         self.r2 = self.load_r2()
         self.mineru = self.load_mineru()
+        self.jwt = self.load_jwt()
         self.llm = self.load_llm()
         self.feishu = self.load_feishu()
     def load_env(self) -> dict[str, str | None]:
@@ -93,6 +95,13 @@ class Config:
             secret_access_key=self.get("R2_SECRET_ACCESS_KEY"),
             bucket_name=self.get("R2_BUCKET_NAME"),
             key_prefix=self.get("R2_KEY_PREFIX"),
+        )
+
+    def load_jwt(self) -> JwtConfig:
+        secret = self.get("JWT_SECRET") or "dev-only-change-me-jwt-secret-min-32b"
+        return JwtConfig(
+            secret=secret,
+            expire_minutes=self.get_int("JWT_EXPIRE_MINUTES", 10080),
         )
 
     def load_mineru(self) -> MineruConfig:

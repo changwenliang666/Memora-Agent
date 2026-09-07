@@ -7,10 +7,10 @@ T = TypeVar('T')
 class ResponseStructure[T](BaseModel):
     code: int = Field(default=BizCode.SUCCESS.value)
     message: str
-    data: T
+    data: T | None = None
     def to_dict(self):
         return {
-            "code": self.code.value,
+            "code": self.code,
             "message": self.message,
             "data": self.data,
         }

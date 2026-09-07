@@ -1,8 +1,20 @@
 from fastapi.testclient import TestClient
 
+from memora_agent.core.auth import create_access_token
 from memora_agent.main import app
+from memora_agent.schema.bizcode import BizCode
 from memora_agent.storage.r2 import PresignGetResult, PresignResult, R2ConfigError
 from memora_agent.storage.validate import MAX_UPLOAD_SIZE
+
+
+def bearer_headers(user_id: int = 1, username: str = "tester") -> dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(user_id, username)}"}
+
+
+def authed_client() -> TestClient:
+    client = TestClient(app)
+    client.headers.update(bearer_headers())
+    return client
 
 
 class RecordingStorage:
@@ -47,7 +59,7 @@ def test_presign_valid_pdf_returns_upload_url(monkeypatch) -> None:
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
-    client = TestClient(app)
+    client = authed_client()
 
     response = client.post(
         "/files/presign",
@@ -78,7 +90,7 @@ def test_presign_valid_markdown_returns_upload_url(monkeypatch) -> None:
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
-    client = TestClient(app)
+    client = authed_client()
 
     response = client.post(
         "/files/presign",
@@ -99,7 +111,7 @@ def test_presign_rejects_disallowed_extension(monkeypatch) -> None:
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
-    client = TestClient(app)
+    client = authed_client()
 
     response = client.post(
         "/files/presign",
@@ -121,7 +133,7 @@ def test_presign_rejects_size_above_limit(monkeypatch) -> None:
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
-    client = TestClient(app)
+    client = authed_client()
 
     response = client.post(
         "/files/presign",
@@ -143,7 +155,7 @@ def test_presign_rejects_zero_size(monkeypatch) -> None:
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
-    client = TestClient(app)
+    client = authed_client()
 
     response = client.post(
         "/files/presign",
@@ -164,7 +176,7 @@ def test_presign_rejects_content_type_mismatch(monkeypatch) -> None:
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
-    client = TestClient(app)
+    client = authed_client()
 
     response = client.post(
         "/files/presign",
@@ -185,7 +197,7 @@ def test_presign_missing_r2_config_returns_500(monkeypatch) -> None:
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
-    client = TestClient(app)
+    client = authed_client()
 
     response = client.post(
         "/files/presign",
@@ -210,7 +222,7 @@ def test_complete_returns_declared_file_info_and_download_url(monkeypatch) -> No
         "memora_agent.api.files.files.RagService.build_knowledge_base",
         lambda *args: None,
     )
-    client = TestClient(app)
+    client = authed_client()
     payload = {
         "object_key": "abc/notes.pdf",
         "filename": "notes.pdf",
@@ -238,7 +250,7 @@ def test_complete_missing_object_key_is_422(monkeypatch) -> None:
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
-    client = TestClient(app)
+    client = authed_client()
 
     response = client.post(
         "/files/complete",
@@ -260,7 +272,7 @@ def test_complete_missing_r2_config_returns_500(monkeypatch) -> None:
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
     )
-    client = TestClient(app)
+    client = authed_client()
 
     response = client.post(
         "/files/complete",
@@ -277,7 +289,7 @@ def test_complete_missing_r2_config_returns_500(monkeypatch) -> None:
 
 
 def test_openapi_lists_file_and_chat_routes() -> None:
-    client = TestClient(app)
+    client = authed_client()
     spec = client.get("/openapi.json").json()
     paths = spec["paths"]
 
@@ -285,3 +297,38 @@ def test_openapi_lists_file_and_chat_routes() -> None:
     assert "/files/complete" in paths
     assert "/chat/agent" in paths
     assert "/chat/rule" in paths
+
+
+def test_presign_without_token_does_not_issue_upload_url() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/files/presign",
+        json={
+            "filename": "notes.pdf",
+            "content_type": "application/pdf",
+            "size": 1024,
+        },
+    )
+    assert response.status_code == 401
+    body = response.json()
+    assert body["code"] == BizCode.UNAUTHORIZED.value
+    assert body["data"] is None
+    assert "upload_url" not in body
+
+
+def test_complete_without_token_does_not_issue_download_url() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/files/complete",
+        json={
+            "object_key": "abc/notes.pdf",
+            "filename": "notes.pdf",
+            "content_type": "application/pdf",
+            "size": 1024,
+        },
+    )
+    assert response.status_code == 401
+    body = response.json()
+    assert body["code"] == BizCode.UNAUTHORIZED.value
+    assert body["data"] is None
+    assert "download_url" not in body

@@ -2,3 +2,6 @@ from enum import IntEnum
 
 class BizCode(IntEnum):
     SUCCESS = 0
+    UNAUTHORIZED = 401
+    USERNAME_ALREADY_EXISTS = 1001
+    INVALID_CREDENTIALS = 1002

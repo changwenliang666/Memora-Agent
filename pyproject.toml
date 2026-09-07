@@ -10,6 +10,7 @@ requires-python = ">=3.14"
 dependencies = [
     "aio-pika>=10.0.1",
     "asyncmy>=0.2.14",
+    "bcrypt>=4.2.0",
     "boto3>=1.35.0",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
@@ -21,6 +22,7 @@ dependencies = [
     "langchain-text-splitters>=1.1.2",
     "langgraph>=1.2.11",
     "pydantic>=2.13.4",
+    "pyjwt>=2.10.1",
     "python-dotenv>=1.2.3",
     "qdrant-client>=1.19.0",
     "sqlalchemy[asyncio]>=2.0.52",

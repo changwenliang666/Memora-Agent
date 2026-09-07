@@ -25,7 +25,8 @@
 - **工具调用循环**：最多 `max_round` 轮；同步 / 异步工具统一走 `ainvoke`
 - **内置示例工具**：查询天气（模拟）、获取当前时间
 - **服务化接入**：FastAPI 暴露 REST API
-- **统一配置**：一个 `Config` 类按 MySQL、Redis、R2、MinerU、LLM 分组加载
+- **统一配置**：一个 `Config` 类按 MySQL、Redis、R2、MinerU、JWT、LLM 分组加载
+- **用户认证**：用户名密码注册 / 登录，签发 JWT；除登录注册与文档外接口需带 `Authorization: Bearer`
 - **开发中间件**：`docker compose up -d` 只起 MySQL / Redis / RabbitMQ / Qdrant，不把 FastAPI 放进容器
 
 ## 快速开始
@@ -37,15 +38,15 @@ cd Memora-Agent
 # 安装依赖（推荐 uv；默认会安装 dev 组中的 uvicorn）
 uv sync
 
-# 配置环境变量（模板含中间件、MinerU、R2、在线模型密钥）
+# 配置环境变量（模板含中间件、MinerU、R2、JWT、在线模型密钥）
 cp .example.env .env
-# 按需填写在线模型的 API Key 和 R2 / MinerU
+# 按需填写在线模型的 API Key、R2 / MinerU，并替换 JWT_SECRET
 
 # 先起 MySQL / Redis / RabbitMQ / Qdrant（应用仍在本机跑）
 docker compose up -d
 ```
 
-运行时配置只走 `core.config.config`。`Config` 构造时只读取一次项目根 `.env`，再用进程环境覆盖同名值，然后通过 `load_mysql()`、`load_redis()`、`load_r2()`、`load_mineru()`、`load_llm()` 等方法生成分组配置：
+运行时配置只走 `core.config.config`。`Config` 构造时只读取一次项目根 `.env`，再用进程环境覆盖同名值，然后通过 `load_mysql()`、`load_redis()`、`load_r2()`、`load_mineru()`、`load_jwt()`、`load_llm()` 等方法生成分组配置：
 
 ```python
 from memora_agent.core.config import config
@@ -53,6 +54,7 @@ from memora_agent.core.config import config
 config.mysql.host
 config.r2.bucket_name
 config.mineru.api_key
+config.jwt.secret
 config.llm["ollama"]
 ```
 
@@ -78,7 +80,11 @@ models = ["deepseek-v4-flash", "deepseek-chat"]
 
 ```env
 DEEPSEEK_API_KEY=sk-your-key
+JWT_SECRET=dev-only-change-me-jwt-secret-min-32b
+JWT_EXPIRE_MINUTES=10080
 ```
+
+`JWT_SECRET` 用于签发和校验登录 token，生产环境必须换成足够长的随机值。`JWT_EXPIRE_MINUTES` 默认 10080（七天）。
 
 使用本地 Ollama 时，需先启动 Ollama 并拉取 TOML 中对应的模型。
 
@@ -89,13 +95,30 @@ uv run uvicorn memora_agent.main:app --reload
 启动后访问：
 
 - API：`http://127.0.0.1:8000`
-- 交互式文档：`http://127.0.0.1:8000/docs`
+- 交互式文档：`http://127.0.0.1:8000/docs`（无需登录）
 
-### 调用 Agent
+### 注册与登录
+
+除 `/auth/register`、`/auth/login` 和文档外，所有接口都需要 `Authorization: Bearer <token>`。
+
+注册和登录始终返回 `{ "code", "message", "data" }`。看 `code` 判断成败：`0` 成功，`1001` 用户名已存在，`1002` 用户名或密码错误。这两条接口的业务失败也是 HTTP 200，不要按 4xx 判断。没带 token 访问受保护接口仍是 HTTP 401。
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username": "dawei", "password": "secret12"}'
+
+curl -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "dawei", "password": "secret12"}'
+```
+
+登录成功后 `data.token` 即为 JWT。后续请求带上：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat/agent \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
   -d '{"message": "现在几点了？", "provider_type": "ollama", "model_name": "qwen3.5:4b-mlx"}'
 ```
 
@@ -127,12 +150,14 @@ curl -X POST http://127.0.0.1:8000/chat/agent \
 
 | 方法 | 路径 | 状态 | 说明 |
 |------|------|------|------|
-| `POST` | `/chat/agent` | 可用 | 运行 Agent 循环；可按 `provider_type + model_name` 选择模型 |
-| `POST` | `/chat/rule` | 可用 | 规则校验：是否允许回答，以及命中的分类 / 主题 / 意图 |
-| `POST` | `/chat/intent` | 可用 | 意图分类：`history` / `weather` / `other`，低置信度返回固定话术 |
-| `POST` | `/chat/stream` | 占位 | 流式接口尚未接上，目前返回占位 JSON |
-| `POST` | `/files/presign` | 可用 | 按申报校验类型 / 大小后，签发 R2 预签名 PUT 地址 |
-| `POST` | `/files/complete` | 可用 | 按 `object_key` 签发短时 GET，回传 `download_url`；后台切文档，不读桶、不落库 |
+| `POST` | `/auth/register` | 可用 | 用户名 + 密码注册；无需 JWT |
+| `POST` | `/auth/login` | 可用 | 用户名 + 密码登录，返回 JWT |
+| `POST` | `/chat/agent` | 可用 | 运行 Agent 循环；需 Bearer JWT |
+| `POST` | `/chat/rule` | 可用 | 规则校验；需 Bearer JWT |
+| `POST` | `/chat/intent` | 可用 | 意图分类；需 Bearer JWT |
+| `POST` | `/chat/stream` | 占位 | 流式接口尚未接上；需 Bearer JWT |
+| `POST` | `/files/presign` | 可用 | 签发 R2 预签名 PUT；需 Bearer JWT |
+| `POST` | `/files/complete` | 可用 | 签发短时 GET 并后台切文档；需 Bearer JWT |
 
 请求体统一为 `ChatRequest`：必填 `message`。`/chat/agent` 还需要 `provider_type` 和 `model_name`。
 
@@ -145,16 +170,20 @@ Memora-Agent/
 ├── config/
 │   └── models.toml                 # Provider 与模型清单
 ├── src/memora_agent/
-│   ├── main.py                     # FastAPI 入口，挂载 /chat 与 /files
+│   ├── main.py                     # FastAPI 入口，挂载 /auth、/chat、/files，JWT 中间件
 │   ├── agent/
 │   │   └── agent.py                # Agent：拼提示词、执行工具、循环推理
 │   ├── api/
+│   │   ├── auth/
+│   │   │   └── auth.py             # /auth/register、/auth/login
 │   │   ├── chat/
 │   │   │   └── chat.py             # /chat/agent、/rule、/intent、/stream
 │   │   └── files/
 │   │       └── files.py            # /files/presign、/files/complete
 │   ├── core/
 │   │   ├── config.py               # Config：按服务加载环境变量与 TOML
+│   │   ├── auth.py                 # JWT 签发/验签、密码哈希、当前用户 ContextVar
+│   │   ├── auth_middleware.py      # 除白名单外校验 Bearer
 │   │   └── provider.py             # 按 provider_type + model_name 构造 Chat 模型
 │   ├── intent_classify/
 │   │   ├── intent_classify.py      # Few-shot 意图分类
@@ -163,6 +192,7 @@ Memora-Agent/
 │   │   ├── rule.py                 # 主题词 + 动作意图规则
 │   │   └── policy.py               # 拦截词表
 │   ├── schema/
+│   │   ├── auth.py                 # 注册 / 登录请求与响应
 │   │   ├── chat.py                 # ChatRequest
 │   │   ├── config.py               # 模型 / Provider / Agent 配置类型
 │   │   ├── files.py                # 文件直传请求 / 响应
@@ -171,6 +201,7 @@ Memora-Agent/
 │   │   ├── bizcode.py              # 业务状态码
 │   │   └── tools.py                # 工具列表与参数 Schema
 │   ├── service/
+│   │   ├── user_service.py         # 用户创建与按用户名查询
 │   │   └── rag_service.py          # 文档解析与切分（complete 后台任务）
 │   ├── storage/
 │   │   ├── r2.py                   # boto3 签发 R2 预签名 URL
@@ -180,7 +211,7 @@ Memora-Agent/
 │   ├── graph/                      # 预留：图编排
 │   └── memory/                     # 预留：记忆
 ├── tests/
-│   ├── api/                        # /files、CORS
+│   ├── api/                        # /auth、/files、CORS
 │   ├── core/                       # 配置加载与模型选择
 │   ├── schema/                     # 请求体校验
 │   ├── storage/                    # R2 签发与文件申报校验
@@ -198,8 +229,10 @@ Memora-Agent/
 
 | 模块 | 职责 |
 |------|------|
+| `api.auth` | 注册、登录，签发 JWT |
 | `api.chat` | 对外 HTTP 入口，把请求转给 Agent / Rule / IntentClassify |
 | `api.files` | 签发 R2 临时上传 / 下载地址，complete 后触发后台切文档 |
+| `core.auth` | JWT、密码哈希、请求级 `get_current_user()` |
 | `service.RagService` | MinerU 拉文件并按标题 / 长度切分 |
 | `storage` | 文件申报校验与 boto3 预签名 |
 | `agent.Agent` | 绑定工具、构建系统提示词、按 `tool_calls` 调用工具并回填历史 |

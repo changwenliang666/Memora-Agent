@@ -197,7 +197,7 @@ R2_KEY_PREFIX=knowledge-base
 2. 填写 `.env` 的四个 R2 字段
 3. 桶上配好 CORS
 4. `uv run uvicorn memora_agent.main:app --reload`
-5. 打开 `http://127.0.0.1:8000/docs`，先调 `/files/presign`，再用返回的 `upload_url` 做 `PUT`，最后调 `/files/complete`
+5. 打开 `http://127.0.0.1:8000/docs`，先注册或登录拿到 JWT，再调 `/files/presign`（Header 带 `Authorization: Bearer`），用返回的 `upload_url` 做 `PUT`，最后调 `/files/complete`
 
 没有前端时，第二步可以用 curl：
 
