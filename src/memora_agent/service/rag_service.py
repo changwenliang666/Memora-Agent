@@ -1,6 +1,7 @@
 import base64
 import re
 import uuid
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
@@ -32,6 +33,28 @@ _TEXT_EXTS = frozenset({".txt", ".md"})
 _IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg"})
 
 
+@dataclass(frozen=True, slots=True)
+class ImageOcrReplacement:
+    """Markdown 配图被 OCR 替换后的结果。"""
+
+    text_for_embedding: str
+    concatenated_ocr: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedIngest:
+    """按文件类型准备好的入库材料。
+
+    ``text_for_embedding`` 交给切块；``stored_*`` 仅在向量写入成功后落库。
+    """
+
+    text_for_embedding: str
+    stored_markdown: str | None
+    stored_plain_text: str | None
+    stored_ocr_text: str | None
+    stored_image_keys: list[str]
+
+
 class RagService:
     """知识库入库编排服务。
 
@@ -41,22 +64,24 @@ class RagService:
     """
 
     @staticmethod
-    def build_points_data(documents: list[Document], embedding: list[float]) -> list[PointStruct]:
+    def build_qdrant_points(
+        documents: list[Document], vectors: list[list[float]]
+    ) -> list[PointStruct]:
         """把切块文档和对应向量组装成 Qdrant 写入点。
 
-        每个 Document 与 embedding 按位置一一对应。point id 用 UUID 生成，
+        每个 Document 与 vector 按位置一一对应。point id 用 UUID 生成，
         payload 保留文档全部 metadata，并额外写入 ``content``（即 page_content），
         检索时可以直接从 payload 取原文。
 
         Args:
             documents: 切块后的 LangChain Document 列表。
-            embedding: 与 documents 等长的向量列表。
+            vectors: 与 documents 等长的向量列表。
 
         Returns:
             可直接交给 Qdrant upsert 的 PointStruct 列表。
         """
         points = []
-        for document, vector in zip(documents, embedding):
+        for document, vector in zip(documents, vectors):
             points.append(
                 PointStruct(
                     id=uuid.uuid4(),
@@ -126,7 +151,7 @@ class RagService:
         Returns:
             切块后的 Document 列表；空文本时可能为空。
         """
-        sessions: list[Document] = []
+        header_sections: list[Document] = []
         text_splitter = MarkdownHeaderTextSplitter(
             headers_to_split_on=[
                 ("#", "h1"),
@@ -134,25 +159,25 @@ class RagService:
                 ("###", "h3"),
             ]
         )
-        sessions.extend(text_splitter.split_text(text))
-        for session in sessions:
-            session.metadata = {"source": object_key, "filename": filename}
+        header_sections.extend(text_splitter.split_text(text))
+        for section in header_sections:
+            section.metadata = {"source": object_key, "filename": filename}
 
         recursive_splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
             chunk_overlap=50,
             separators=["\n\n", "\n", "。", "；", ";", ". ", " ", ""],
         )
-        final_docs: list[Document] = []
-        for session in sessions:
-            if len(session.page_content) > 500:
-                final_docs.extend(recursive_splitter.split_documents([session]))
+        chunks: list[Document] = []
+        for section in header_sections:
+            if len(section.page_content) > 500:
+                chunks.extend(recursive_splitter.split_documents([section]))
             else:
-                final_docs.append(session)
-        return final_docs
+                chunks.append(section)
+        return chunks
 
     @staticmethod
-    async def replace_markdown_images(markdown: str) -> tuple[str, str | None]:
+    async def replace_images_with_ocr(markdown: str) -> ImageOcrReplacement:
         """把 Markdown 里的图片替换成 OCR 文字，供后续切块嵌入。
 
         MinerU 转出来的 Markdown 常带 ``![alt](url)``。向量检索吃不到图片，
@@ -163,26 +188,31 @@ class RagService:
             markdown: MinerU 产出的原始 Markdown。
 
         Returns:
-            ``(embed_text, ocr_text)``：
-            - embed_text：图片已被 OCR 文字替换后的全文，用于切块嵌入。
-            - ocr_text：各图 OCR 结果用空行拼接；没有图片时为 None。
+            ``ImageOcrReplacement``：
+            - text_for_embedding：图片已被 OCR 文字替换后的全文，用于切块嵌入。
+            - concatenated_ocr：各图 OCR 结果用空行拼接；没有图片时为 None。
         """
         matches = list(_MARKDOWN_IMAGE.finditer(markdown))
         if not matches:
-            return markdown, None
+            return ImageOcrReplacement(text_for_embedding=markdown, concatenated_ocr=None)
 
         ocr = OcrService()
-        replaced = markdown
+        text_for_embedding = markdown
         ocr_parts: list[str] = []
         for match in matches:
             url = match.group(2).strip()
             try:
-                text = await ocr.invoke(url)
+                ocr_result = await ocr.invoke(url)
             except Exception:
-                text = ""
-            ocr_parts.append(text or "")
-            replaced = replaced.replace(match.group(0), text or "", 1)
-        return replaced, "\n\n".join(ocr_parts)
+                ocr_result = ""
+            ocr_parts.append(ocr_result or "")
+            text_for_embedding = text_for_embedding.replace(
+                match.group(0), ocr_result or "", 1
+            )
+        return ImageOcrReplacement(
+            text_for_embedding=text_for_embedding,
+            concatenated_ocr="\n\n".join(ocr_parts),
+        )
 
     @staticmethod
     def copy_markdown_images(markdown: str, object_key: str) -> list[str]:
@@ -200,18 +230,20 @@ class RagService:
         """
         prefix = RagService._file_prefix(object_key)
         storage = R2Storage(config.r2)
-        keys: list[str] = []
+        stored_image_keys: list[str] = []
         for match in _MARKDOWN_IMAGE.finditer(markdown):
             url = match.group(2).strip()
-            name = PurePosixPath(urlparse(url).path).name or f"image-{len(keys)}.jpg"
+            name = PurePosixPath(urlparse(url).path).name or (
+                f"image-{len(stored_image_keys)}.jpg"
+            )
             try:
-                data = RagService._download(url)
+                image_bytes = RagService._download(url)
                 key = f"{prefix}/images/{name}"
-                storage.put_object(key, data, RagService._image_content_type(name))
-                keys.append(key)
+                storage.put_object(key, image_bytes, RagService._image_content_type(name))
+                stored_image_keys.append(key)
             except Exception:
                 continue
-        return keys
+        return stored_image_keys
 
     @staticmethod
     async def save_knowledge_file(
@@ -260,14 +292,14 @@ class RagService:
         file_url: str,
         object_key: str,
         filename: str,
-    ) -> tuple[str, str | None, str | None, str | None, list[str]]:
+    ) -> PreparedIngest:
         """按文件类型准备入库文本和附属产物。
 
         三条路径：
-        - 图片（png/jpg/jpeg）：下载后转 data URL 做 OCR，OCR 结果既当嵌入文本也当 ocr_text。
-        - 纯文本（txt/md）：按 UTF-8 解码，原文既当嵌入文本也当 plain_text。
+        - 图片（png/jpg/jpeg）：下载后转 data URL 做 OCR，OCR 结果既当嵌入文本也当 stored_ocr_text。
+        - 纯文本（txt/md）：按 UTF-8 解码，原文既当嵌入文本也当 stored_plain_text。
         - PDF/DOCX：走 MinerU 转 Markdown，再 OCR 替换配图、把配图转存 R2。
-          嵌入用「图片已替换成文字」的文本，markdown 保留 MinerU 原文。
+          嵌入用「图片已替换成文字」的文本，stored_markdown 保留 MinerU 原文。
 
         Args:
             file_url: 可下载的源文件 URL（通常是 R2 预签名地址）。
@@ -275,24 +307,36 @@ class RagService:
             filename: 原始文件名，用来判断后缀。
 
         Returns:
-            ``(embed_text, markdown, plain_text, ocr_text, image_keys)``。
-            embed_text 始终有值；其余字段按类型填或不填。
+            ``PreparedIngest``。text_for_embedding 始终有值；stored_* 按类型填或不填。
 
         Raises:
             Exception: MinerU api key 缺失，或不支持的文件后缀。
         """
         suffix = RagService._suffix(filename)
         if suffix in _IMAGE_EXTS:
-            data = RagService._download(file_url)
+            file_bytes = RagService._download(file_url)
             content_type = RagService._image_content_type(filename)
             ocr_text = await OcrService().invoke(
-                f"data:{content_type};base64,{base64.b64encode(data).decode('ascii')}"
+                f"data:{content_type};base64,{base64.b64encode(file_bytes).decode('ascii')}"
             )
-            return ocr_text, None, None, ocr_text, []
+            return PreparedIngest(
+                text_for_embedding=ocr_text,
+                stored_markdown=None,
+                stored_plain_text=None,
+                stored_ocr_text=ocr_text,
+                stored_image_keys=[],
+            )
 
         if suffix in _TEXT_EXTS:
-            plain_text = RagService._download(file_url).decode("utf-8")
-            return plain_text, None, plain_text, None, []
+            file_bytes = RagService._download(file_url)
+            plain_text = file_bytes.decode("utf-8")
+            return PreparedIngest(
+                text_for_embedding=plain_text,
+                stored_markdown=None,
+                stored_plain_text=plain_text,
+                stored_ocr_text=None,
+                stored_image_keys=[],
+            )
 
         if suffix in _CONVERTER_EXTS:
             mineru_config = config.mineru
@@ -304,10 +348,18 @@ class RagService:
                 token=mineru_config.api_key,
             )
             docs = loader.load()
-            markdown = "\n\n".join(doc.page_content for doc in docs)
-            embed_text, ocr_text = await RagService.replace_markdown_images(markdown)
-            image_keys = RagService.copy_markdown_images(markdown, object_key)
-            return embed_text, markdown, None, ocr_text, image_keys
+            converted_markdown = "\n\n".join(doc.page_content for doc in docs)
+            replacement = await RagService.replace_images_with_ocr(converted_markdown)
+            stored_image_keys = RagService.copy_markdown_images(
+                converted_markdown, object_key
+            )
+            return PreparedIngest(
+                text_for_embedding=replacement.text_for_embedding,
+                stored_markdown=converted_markdown,
+                stored_plain_text=None,
+                stored_ocr_text=replacement.concatenated_ocr,
+                stored_image_keys=stored_image_keys,
+            )
 
         raise Exception("不支持的文件类型")
 
@@ -317,7 +369,7 @@ class RagService:
         object_key: str,
         filename: str,
         user_id: int,
-        nick_name:str,
+        username: str,
         size: int,
     ):
         """知识库入库主流程：解析 → 切块 → 向量化 → 写入 Qdrant → 落库元数据。
@@ -340,15 +392,15 @@ class RagService:
             Exception: 切块后写入失败、Qdrant 未完成、或解析过程出错。
         """
         try:
-            embed_text, markdown, plain_text, ocr_text, image_keys = (
-                await RagService.prepare_ingest(file_url, object_key, filename)
+            prepared = await RagService.prepare_ingest(file_url, object_key, filename)
+            chunks = RagService.split_text(
+                prepared.text_for_embedding, object_key, filename
             )
-            final_docs = RagService.split_text(embed_text, object_key, filename)
-            if len(final_docs) == 0:
+            if len(chunks) == 0:
                 return
 
-            embedding = await EmbeddingService().get_batch_embedding(final_docs)
-            points = RagService.build_points_data(final_docs, embedding)
+            vectors = await EmbeddingService().get_batch_embedding(chunks)
+            points = RagService.build_qdrant_points(chunks, vectors)
             update_status = qdrantService.upsert(points)
             if update_status.status == UpdateStatus.COMPLETED:
                 await RagService.save_knowledge_file(
@@ -356,12 +408,12 @@ class RagService:
                     filename=filename,
                     object_key=object_key,
                     size=size,
-                    image_keys=image_keys,
-                    markdown=markdown,
-                    plain_text=plain_text,
-                    ocr_text=ocr_text,
+                    image_keys=prepared.stored_image_keys,
+                    markdown=prepared.stored_markdown,
+                    plain_text=prepared.stored_plain_text,
+                    ocr_text=prepared.stored_ocr_text,
                 )
-                WebhookService.send_knowledge_base_build_success(filename,username)
+                WebhookService.send_knowledge_base_build_success(filename, username)
             else:
                 raise Exception("建库失败")
         except Exception as e:

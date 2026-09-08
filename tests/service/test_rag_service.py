@@ -6,7 +6,7 @@ from qdrant_client.models import UpdateStatus
 
 from memora_agent.db.models.knowledge_file import KnowledgeFile
 from memora_agent.schema.config import MineruConfig
-from memora_agent.service.rag_service import RagService
+from memora_agent.service.rag_service import PreparedIngest, RagService
 
 
 class BoomLoader:
@@ -94,7 +94,7 @@ def test_prepare_ingest_txt_skips_mineru(monkeypatch) -> None:
         lambda url, **kwargs: FakeResponse("hello txt".encode("utf-8")),
     )
 
-    embed_text, markdown, plain_text, ocr_text, image_keys = asyncio.run(
+    prepared = asyncio.run(
         RagService.prepare_ingest(
             "https://r2.example/notes.txt",
             "abc/notes.txt",
@@ -102,11 +102,11 @@ def test_prepare_ingest_txt_skips_mineru(monkeypatch) -> None:
         )
     )
 
-    assert embed_text == "hello txt"
-    assert markdown is None
-    assert plain_text == "hello txt"
-    assert ocr_text is None
-    assert image_keys == []
+    assert prepared.text_for_embedding == "hello txt"
+    assert prepared.stored_markdown is None
+    assert prepared.stored_plain_text == "hello txt"
+    assert prepared.stored_ocr_text is None
+    assert prepared.stored_image_keys == []
 
 
 def test_prepare_ingest_png_skips_mineru(monkeypatch) -> None:
@@ -118,7 +118,7 @@ def test_prepare_ingest_png_skips_mineru(monkeypatch) -> None:
         lambda url, **kwargs: FakeResponse(b"\x89PNG"),
     )
 
-    embed_text, markdown, plain_text, ocr_text, image_keys = asyncio.run(
+    prepared = asyncio.run(
         RagService.prepare_ingest(
             "https://r2.example/photo.png",
             "abc/photo.png",
@@ -126,11 +126,11 @@ def test_prepare_ingest_png_skips_mineru(monkeypatch) -> None:
         )
     )
 
-    assert markdown is None
-    assert plain_text is None
-    assert ocr_text == "图中有一只猫"
-    assert embed_text == ocr_text
-    assert image_keys == []
+    assert prepared.stored_markdown is None
+    assert prepared.stored_plain_text is None
+    assert prepared.stored_ocr_text == "图中有一只猫"
+    assert prepared.text_for_embedding == prepared.stored_ocr_text
+    assert prepared.stored_image_keys == []
     assert ocr.calls[0].startswith("data:image/png;base64,")
 
 
@@ -152,7 +152,7 @@ def test_prepare_ingest_pdf_uses_mineru(monkeypatch) -> None:
         lambda url, **kwargs: FakeResponse(b"img"),
     )
 
-    embed_text, markdown, plain_text, ocr_text, image_keys = asyncio.run(
+    prepared = asyncio.run(
         RagService.prepare_ingest(
             "https://r2.example/notes.pdf",
             "folder/uuid/notes.pdf",
@@ -160,20 +160,20 @@ def test_prepare_ingest_pdf_uses_mineru(monkeypatch) -> None:
         )
     )
 
-    assert markdown is not None
-    assert "![ok](https://cdn.example/ok.jpg)" in markdown
-    assert "图中有一只猫" in embed_text
-    assert "![ok]" not in embed_text
-    assert "![bad]" not in embed_text
-    assert plain_text is None
-    assert ocr_text == "图中有一只猫\n\n"
-    assert image_keys == [
+    assert prepared.stored_markdown is not None
+    assert "![ok](https://cdn.example/ok.jpg)" in prepared.stored_markdown
+    assert "图中有一只猫" in prepared.text_for_embedding
+    assert "![ok]" not in prepared.text_for_embedding
+    assert "![bad]" not in prepared.text_for_embedding
+    assert prepared.stored_plain_text is None
+    assert prepared.stored_ocr_text == "图中有一只猫\n\n"
+    assert prepared.stored_image_keys == [
         "folder/uuid/images/ok.jpg",
         "folder/uuid/images/bad.jpg",
     ]
 
 
-def test_replace_markdown_images_keeps_going_after_one_failure(monkeypatch) -> None:
+def test_replace_images_with_ocr_keeps_going_after_one_failure(monkeypatch) -> None:
     ocr = FakeOcr()
     monkeypatch.setattr("memora_agent.service.rag_service.OcrService", lambda: ocr)
     markdown = (
@@ -181,11 +181,13 @@ def test_replace_markdown_images_keeps_going_after_one_failure(monkeypatch) -> N
         "![bad](https://cdn.example/bad.jpg)后"
     )
 
-    replaced, ocr_text = asyncio.run(RagService.replace_markdown_images(markdown))
-    docs = RagService.split_text(replaced, "folder/uuid/notes.pdf", "notes.pdf")
+    replacement = asyncio.run(RagService.replace_images_with_ocr(markdown))
+    docs = RagService.split_text(
+        replacement.text_for_embedding, "folder/uuid/notes.pdf", "notes.pdf"
+    )
 
-    assert replaced == "前图中有一只猫中后"
-    assert ocr_text == "图中有一只猫\n\n"
+    assert replacement.text_for_embedding == "前图中有一只猫中后"
+    assert replacement.concatenated_ocr == "图中有一只猫\n\n"
     assert docs
     assert "图中有一只猫" in docs[0].page_content
 
@@ -201,18 +203,18 @@ def test_copy_markdown_images_uses_file_prefix(monkeypatch) -> None:
         lambda url, **kwargs: FakeResponse(b"img-bytes"),
     )
 
-    keys = RagService.copy_markdown_images(
+    stored_image_keys = RagService.copy_markdown_images(
         "![a](https://cdn.example/fig-a.png) ![b](https://cdn.example/fig-b.jpg)",
         "kb/file-id/notes.pdf",
     )
 
-    assert keys == [
+    assert stored_image_keys == [
         "kb/file-id/images/fig-a.png",
         "kb/file-id/images/fig-b.jpg",
     ]
-    assert [key for key, _, _ in puts] == keys
-    assert all("/images/" in key for key in keys)
-    assert all(key.startswith("kb/file-id/") for key in keys)
+    assert [key for key, _, _ in puts] == stored_image_keys
+    assert all("/images/" in key for key in stored_image_keys)
+    assert all(key.startswith("kb/file-id/") for key in stored_image_keys)
 
 
 def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
@@ -229,11 +231,17 @@ def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
     monkeypatch.setattr("memora_agent.service.rag_service.qdrantService", qdrant)
     monkeypatch.setattr(
         "memora_agent.service.rag_service.WebhookService.send_knowledge_base_build_success",
-        lambda filename: None,
+        lambda filename, username: None,
     )
 
     async def fake_prepare(*args, **kwargs):
-        return "hello txt", None, "hello txt", None, []
+        return PreparedIngest(
+            text_for_embedding="hello txt",
+            stored_markdown=None,
+            stored_plain_text="hello txt",
+            stored_ocr_text=None,
+            stored_image_keys=[],
+        )
 
     monkeypatch.setattr(
         "memora_agent.service.rag_service.RagService.prepare_ingest",
@@ -246,6 +254,7 @@ def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
             "abc/notes.txt",
             "notes.txt",
             7,
+            "tester",
             12,
         )
     )
@@ -279,7 +288,13 @@ def test_build_knowledge_base_skips_insert_when_upsert_fails(monkeypatch) -> Non
     )
 
     async def fake_prepare(*args, **kwargs):
-        return "hello txt", None, "hello txt", None, []
+        return PreparedIngest(
+            text_for_embedding="hello txt",
+            stored_markdown=None,
+            stored_plain_text="hello txt",
+            stored_ocr_text=None,
+            stored_image_keys=[],
+        )
 
     monkeypatch.setattr(
         "memora_agent.service.rag_service.RagService.prepare_ingest",
@@ -293,6 +308,7 @@ def test_build_knowledge_base_skips_insert_when_upsert_fails(monkeypatch) -> Non
                 "abc/notes.txt",
                 "notes.txt",
                 7,
+                "tester",
                 12,
             )
         )

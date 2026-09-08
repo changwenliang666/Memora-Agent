@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, JSON, String, Text
+from sqlalchemy import BigInteger, ForeignKey, JSON, String
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from memora_agent.db.database import Base
@@ -35,15 +36,15 @@ class KnowledgeFile(Base):
         default=list,
     )
     markdown: Mapped[str | None] = mapped_column(
-        Text,
+        MEDIUMTEXT,
         nullable=True,
     )
     plain_text: Mapped[str | None] = mapped_column(
-        Text,
+        MEDIUMTEXT,
         nullable=True,
     )
     ocr_text: Mapped[str | None] = mapped_column(
-        Text,
+        MEDIUMTEXT,
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
