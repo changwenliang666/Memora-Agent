@@ -34,11 +34,19 @@ _IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg"})
 
 
 @dataclass(frozen=True, slots=True)
+class ImageOcrItem:
+    """单张图的 OCR 结果，落库时转成 JSON 对象。"""
+
+    image_key: str | None
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class ImageOcrReplacement:
     """Markdown 配图被 OCR 替换后的结果。"""
 
     text_for_embedding: str
-    concatenated_ocr: str | None
+    ocr_results: list[ImageOcrItem]
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +59,7 @@ class PreparedIngest:
     text_for_embedding: str
     stored_markdown: str | None
     stored_plain_text: str | None
-    stored_ocr_text: str | None
+    stored_ocr_results: list[ImageOcrItem]
     stored_image_keys: list[str]
 
 
@@ -177,41 +185,66 @@ class RagService:
         return chunks
 
     @staticmethod
-    async def replace_images_with_ocr(markdown: str) -> ImageOcrReplacement:
-        """把 Markdown 里的图片替换成 OCR 文字，供后续切块嵌入。
+    def _try_copy_markdown_image(
+        url: str,
+        object_key: str,
+        fallback_index: int,
+        storage: R2Storage,
+    ) -> str | None:
+        """把一张 Markdown 配图拷到源文件前缀下的 ``images/``。失败返回 None。"""
+        prefix = RagService._file_prefix(object_key)
+        name = PurePosixPath(urlparse(url).path).name or f"image-{fallback_index}.jpg"
+        try:
+            image_bytes = RagService._download(url)
+            key = f"{prefix}/images/{name}"
+            storage.put_object(key, image_bytes, RagService._image_content_type(name))
+            return key
+        except Exception:
+            return None
+
+    @staticmethod
+    async def replace_images_with_ocr(
+        markdown: str, object_key: str
+    ) -> ImageOcrReplacement:
+        """把 Markdown 里的图片替换成 OCR 文字，并按图拷贝到对象存储。
 
         MinerU 转出来的 Markdown 常带 ``![alt](url)``。向量检索吃不到图片，
         所以对每张图调 OCR，用识别结果替换原图片语法。
         某张图 OCR 失败时该处替换为空字符串，不中断整篇处理。
+        拷贝失败时该条 ``image_key`` 为 None，仍保留 OCR 文本。
 
         Args:
             markdown: MinerU 产出的原始 Markdown。
+            object_key: 源文件对象存储 key，用来计算 ``images/`` 前缀。
 
         Returns:
             ``ImageOcrReplacement``：
             - text_for_embedding：图片已被 OCR 文字替换后的全文，用于切块嵌入。
-            - concatenated_ocr：各图 OCR 结果用空行拼接；没有图片时为 None。
+            - ocr_results：按 Markdown 出现顺序的按图结果；没有图片时为空列表。
         """
         matches = list(_MARKDOWN_IMAGE.finditer(markdown))
         if not matches:
-            return ImageOcrReplacement(text_for_embedding=markdown, concatenated_ocr=None)
+            return ImageOcrReplacement(text_for_embedding=markdown, ocr_results=[])
 
         ocr = OcrService()
+        storage = R2Storage(config.r2)
         text_for_embedding = markdown
-        ocr_parts: list[str] = []
-        for match in matches:
+        ocr_results: list[ImageOcrItem] = []
+        for index, match in enumerate(matches):
             url = match.group(2).strip()
             try:
                 ocr_result = await ocr.invoke(url)
             except Exception:
                 ocr_result = ""
-            ocr_parts.append(ocr_result or "")
-            text_for_embedding = text_for_embedding.replace(
-                match.group(0), ocr_result or "", 1
+            ocr_result = ocr_result or ""
+            image_key = RagService._try_copy_markdown_image(
+                url, object_key, index, storage
             )
+            ocr_results.append(ImageOcrItem(image_key=image_key, text=ocr_result))
+            text_for_embedding = text_for_embedding.replace(match.group(0), ocr_result, 1)
         return ImageOcrReplacement(
             text_for_embedding=text_for_embedding,
-            concatenated_ocr="\n\n".join(ocr_parts),
+            ocr_results=ocr_results,
         )
 
     @staticmethod
@@ -228,22 +261,20 @@ class RagService:
         Returns:
             成功写入 R2 的对象 key 列表；没有图或全部失败时为空列表。
         """
-        prefix = RagService._file_prefix(object_key)
         storage = R2Storage(config.r2)
         stored_image_keys: list[str] = []
-        for match in _MARKDOWN_IMAGE.finditer(markdown):
+        for index, match in enumerate(_MARKDOWN_IMAGE.finditer(markdown)):
             url = match.group(2).strip()
-            name = PurePosixPath(urlparse(url).path).name or (
-                f"image-{len(stored_image_keys)}.jpg"
+            image_key = RagService._try_copy_markdown_image(
+                url, object_key, index, storage
             )
-            try:
-                image_bytes = RagService._download(url)
-                key = f"{prefix}/images/{name}"
-                storage.put_object(key, image_bytes, RagService._image_content_type(name))
-                stored_image_keys.append(key)
-            except Exception:
-                continue
+            if image_key is not None:
+                stored_image_keys.append(image_key)
         return stored_image_keys
+
+    @staticmethod
+    def _ocr_results_payload(ocr_results: list[ImageOcrItem]) -> list[dict]:
+        return [{"image_key": item.image_key, "text": item.text} for item in ocr_results]
 
     @staticmethod
     async def save_knowledge_file(
@@ -254,13 +285,14 @@ class RagService:
         image_keys: list[str],
         markdown: str | None,
         plain_text: str | None,
-        ocr_text: str | None,
+        ocr_results: list[ImageOcrItem],
     ) -> None:
         """把知识文件元数据写入数据库。
 
         仅在 Qdrant upsert 成功后调用，避免向量没写上却留下孤立记录。
-        markdown / plain_text / ocr_text 按文件类型互斥填充：
-        PDF/DOCX 有 markdown，txt/md 有 plain_text，图片有 ocr_text。
+        markdown / plain_text 按文件类型互斥填充：
+        PDF/DOCX 有 markdown，txt/md 有 plain_text。
+        ocr_results 在视觉模型跑过时按图一条，否则为空列表。
 
         Args:
             user_id: 上传用户 id。
@@ -270,7 +302,7 @@ class RagService:
             image_keys: 转存到 R2 的配图 key 列表。
             markdown: MinerU 转换结果；非转换类文件为 None。
             plain_text: 纯文本内容；非 txt/md 为 None。
-            ocr_text: 图片 OCR 或 Markdown 配图 OCR 拼接结果。
+            ocr_results: 按图 OCR 结果；未跑视觉模型时为空列表。
         """
         async with AsyncSessionLocal() as session:
             session.add(
@@ -282,7 +314,7 @@ class RagService:
                     image_keys=image_keys,
                     markdown=markdown,
                     plain_text=plain_text,
-                    ocr_text=ocr_text,
+                    ocr_results=RagService._ocr_results_payload(ocr_results),
                 )
             )
             await session.commit()
@@ -296,7 +328,8 @@ class RagService:
         """按文件类型准备入库文本和附属产物。
 
         三条路径：
-        - 图片（png/jpg/jpeg）：下载后转 data URL 做 OCR，OCR 结果既当嵌入文本也当 stored_ocr_text。
+        - 图片（png/jpg/jpeg）：下载后转 data URL 做 OCR，OCR 结果既当嵌入文本，
+          也作为 ``stored_ocr_results`` 的唯一一条（``image_key`` 为源文件 object_key）。
         - 纯文本（txt/md）：按 UTF-8 解码，原文既当嵌入文本也当 stored_plain_text。
         - PDF/DOCX：走 MinerU 转 Markdown，再 OCR 替换配图、把配图转存 R2。
           嵌入用「图片已替换成文字」的文本，stored_markdown 保留 MinerU 原文。
@@ -323,7 +356,7 @@ class RagService:
                 text_for_embedding=ocr_text,
                 stored_markdown=None,
                 stored_plain_text=None,
-                stored_ocr_text=ocr_text,
+                stored_ocr_results=[ImageOcrItem(image_key=object_key, text=ocr_text)],
                 stored_image_keys=[],
             )
 
@@ -334,7 +367,7 @@ class RagService:
                 text_for_embedding=plain_text,
                 stored_markdown=None,
                 stored_plain_text=plain_text,
-                stored_ocr_text=None,
+                stored_ocr_results=[],
                 stored_image_keys=[],
             )
 
@@ -349,15 +382,19 @@ class RagService:
             )
             docs = loader.load()
             converted_markdown = "\n\n".join(doc.page_content for doc in docs)
-            replacement = await RagService.replace_images_with_ocr(converted_markdown)
-            stored_image_keys = RagService.copy_markdown_images(
+            replacement = await RagService.replace_images_with_ocr(
                 converted_markdown, object_key
             )
+            stored_image_keys = [
+                item.image_key
+                for item in replacement.ocr_results
+                if item.image_key is not None
+            ]
             return PreparedIngest(
                 text_for_embedding=replacement.text_for_embedding,
                 stored_markdown=converted_markdown,
                 stored_plain_text=None,
-                stored_ocr_text=replacement.concatenated_ocr,
+                stored_ocr_results=replacement.ocr_results,
                 stored_image_keys=stored_image_keys,
             )
 
@@ -411,7 +448,7 @@ class RagService:
                     image_keys=prepared.stored_image_keys,
                     markdown=prepared.stored_markdown,
                     plain_text=prepared.stored_plain_text,
-                    ocr_text=prepared.stored_ocr_text,
+                    ocr_results=prepared.stored_ocr_results,
                 )
                 WebhookService.send_knowledge_base_build_success(filename, username)
             else:

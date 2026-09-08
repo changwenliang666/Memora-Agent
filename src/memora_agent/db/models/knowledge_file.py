@@ -43,9 +43,10 @@ class KnowledgeFile(Base):
         MEDIUMTEXT,
         nullable=True,
     )
-    ocr_text: Mapped[str | None] = mapped_column(
-        MEDIUMTEXT,
-        nullable=True,
+    ocr_results: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
     )
     created_at: Mapped[datetime] = mapped_column(
         default=datetime.now,

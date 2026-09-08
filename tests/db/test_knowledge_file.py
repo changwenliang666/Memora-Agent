@@ -1,3 +1,4 @@
+from sqlalchemy import JSON
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 
 from memora_agent.db.models.knowledge_file import KnowledgeFile
@@ -15,15 +16,20 @@ def test_knowledge_file_columns() -> None:
         "image_keys",
         "markdown",
         "plain_text",
-        "ocr_text",
+        "ocr_results",
         "created_at",
         "updated_at",
     }
+    assert "ocr_text" not in names
     assert KnowledgeFile.__table__.c.markdown.nullable is True
     assert KnowledgeFile.__table__.c.plain_text.nullable is True
-    assert KnowledgeFile.__table__.c.ocr_text.nullable is True
+    assert KnowledgeFile.__table__.c.ocr_results.nullable is False
     assert KnowledgeFile.__table__.c.image_keys.nullable is False
-    for column_name in ("markdown", "plain_text", "ocr_text"):
+    for column_name in ("markdown", "plain_text"):
         column_type = KnowledgeFile.__table__.c[column_name].type
         assert isinstance(column_type, MEDIUMTEXT)
         assert type(column_type).__name__ == "MEDIUMTEXT"
+    assert isinstance(KnowledgeFile.__table__.c.ocr_results.type, JSON)
+    assert type(KnowledgeFile.__table__.c.ocr_results.type) is type(
+        KnowledgeFile.__table__.c.image_keys.type
+    )

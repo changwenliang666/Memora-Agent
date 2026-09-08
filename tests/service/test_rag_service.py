@@ -6,7 +6,7 @@ from qdrant_client.models import UpdateStatus
 
 from memora_agent.db.models.knowledge_file import KnowledgeFile
 from memora_agent.schema.config import MineruConfig
-from memora_agent.service.rag_service import PreparedIngest, RagService
+from memora_agent.service.rag_service import ImageOcrItem, PreparedIngest, RagService
 
 
 class BoomLoader:
@@ -105,7 +105,7 @@ def test_prepare_ingest_txt_skips_mineru(monkeypatch) -> None:
     assert prepared.text_for_embedding == "hello txt"
     assert prepared.stored_markdown is None
     assert prepared.stored_plain_text == "hello txt"
-    assert prepared.stored_ocr_text is None
+    assert prepared.stored_ocr_results == []
     assert prepared.stored_image_keys == []
 
 
@@ -128,8 +128,10 @@ def test_prepare_ingest_png_skips_mineru(monkeypatch) -> None:
 
     assert prepared.stored_markdown is None
     assert prepared.stored_plain_text is None
-    assert prepared.stored_ocr_text == "图中有一只猫"
-    assert prepared.text_for_embedding == prepared.stored_ocr_text
+    assert prepared.stored_ocr_results == [
+        ImageOcrItem(image_key="abc/photo.png", text="图中有一只猫")
+    ]
+    assert prepared.text_for_embedding == "图中有一只猫"
     assert prepared.stored_image_keys == []
     assert ocr.calls[0].startswith("data:image/png;base64,")
 
@@ -166,7 +168,10 @@ def test_prepare_ingest_pdf_uses_mineru(monkeypatch) -> None:
     assert "![ok]" not in prepared.text_for_embedding
     assert "![bad]" not in prepared.text_for_embedding
     assert prepared.stored_plain_text is None
-    assert prepared.stored_ocr_text == "图中有一只猫\n\n"
+    assert prepared.stored_ocr_results == [
+        ImageOcrItem(image_key="folder/uuid/images/ok.jpg", text="图中有一只猫"),
+        ImageOcrItem(image_key="folder/uuid/images/bad.jpg", text=""),
+    ]
     assert prepared.stored_image_keys == [
         "folder/uuid/images/ok.jpg",
         "folder/uuid/images/bad.jpg",
@@ -175,19 +180,33 @@ def test_prepare_ingest_pdf_uses_mineru(monkeypatch) -> None:
 
 def test_replace_images_with_ocr_keeps_going_after_one_failure(monkeypatch) -> None:
     ocr = FakeOcr()
+    puts: list[tuple[str, bytes, str]] = []
     monkeypatch.setattr("memora_agent.service.rag_service.OcrService", lambda: ocr)
+    monkeypatch.setattr(
+        "memora_agent.service.rag_service.R2Storage",
+        lambda *args, **kwargs: FakeR2Storage(puts),
+    )
+    monkeypatch.setattr(
+        "memora_agent.service.rag_service.httpx.get",
+        lambda url, **kwargs: FakeResponse(b"img"),
+    )
     markdown = (
         "前![ok](https://cdn.example/ok.jpg)中"
         "![bad](https://cdn.example/bad.jpg)后"
     )
 
-    replacement = asyncio.run(RagService.replace_images_with_ocr(markdown))
+    replacement = asyncio.run(
+        RagService.replace_images_with_ocr(markdown, "folder/uuid/notes.pdf")
+    )
     docs = RagService.split_text(
         replacement.text_for_embedding, "folder/uuid/notes.pdf", "notes.pdf"
     )
 
     assert replacement.text_for_embedding == "前图中有一只猫中后"
-    assert replacement.concatenated_ocr == "图中有一只猫\n\n"
+    assert replacement.ocr_results == [
+        ImageOcrItem(image_key="folder/uuid/images/ok.jpg", text="图中有一只猫"),
+        ImageOcrItem(image_key="folder/uuid/images/bad.jpg", text=""),
+    ]
     assert docs
     assert "图中有一只猫" in docs[0].page_content
 
@@ -239,7 +258,7 @@ def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
             text_for_embedding="hello txt",
             stored_markdown=None,
             stored_plain_text="hello txt",
-            stored_ocr_text=None,
+            stored_ocr_results=[],
             stored_image_keys=[],
         )
 
@@ -269,7 +288,7 @@ def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
     assert record.image_keys == []
     assert record.markdown is None
     assert record.plain_text == "hello txt"
-    assert record.ocr_text is None
+    assert record.ocr_results == []
 
 
 def test_build_knowledge_base_skips_insert_when_upsert_fails(monkeypatch) -> None:
@@ -292,7 +311,7 @@ def test_build_knowledge_base_skips_insert_when_upsert_fails(monkeypatch) -> Non
             text_for_embedding="hello txt",
             stored_markdown=None,
             stored_plain_text="hello txt",
-            stored_ocr_text=None,
+            stored_ocr_results=[],
             stored_image_keys=[],
         )
 

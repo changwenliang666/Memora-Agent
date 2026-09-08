@@ -2,8 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from sqlalchemy import text
-
 from memora_agent.api.auth.auth import auth_router
 from memora_agent.api.chat.chat import chat_router
 from memora_agent.api.files.files import files_router
@@ -22,14 +20,6 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            await conn.execute(
-                text(
-                    "ALTER TABLE knowledge_files "
-                    "MODIFY markdown MEDIUMTEXT NULL, "
-                    "MODIFY plain_text MEDIUMTEXT NULL, "
-                    "MODIFY ocr_text MEDIUMTEXT NULL"
-                )
-            )
     except Exception as exc:
         print(exc)
     yield
