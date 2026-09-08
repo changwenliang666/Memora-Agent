@@ -74,6 +74,7 @@ def test_presign_valid_pdf_returns_upload_url(monkeypatch) -> None:
     body = response.json()
     assert body["upload_url"] == "https://r2.example/upload"
     assert "notes.pdf" in body["object_key"]
+    assert "/" in body["object_key"]
     assert body["expires_in"] > 0
     assert storage.presign_calls == [("notes.pdf", "application/pdf")]
 
@@ -105,8 +106,14 @@ def test_presign_valid_markdown_returns_upload_url(monkeypatch) -> None:
     assert response.json()["upload_url"] == "https://r2.example/upload-md"
 
 
-def test_presign_rejects_disallowed_extension(monkeypatch) -> None:
-    storage = RecordingStorage()
+def test_presign_valid_png_returns_upload_url(monkeypatch) -> None:
+    storage = RecordingStorage(
+        result=PresignResult(
+            upload_url="https://r2.example/upload-png",
+            object_key="abc/photo.png",
+            expires_in=900,
+        )
+    )
     monkeypatch.setattr(
         "memora_agent.api.files.files.get_r2_storage",
         lambda: storage,
@@ -118,6 +125,64 @@ def test_presign_rejects_disallowed_extension(monkeypatch) -> None:
         json={
             "filename": "photo.png",
             "content_type": "image/png",
+            "size": 1024,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["upload_url"] == "https://r2.example/upload-png"
+    assert "photo.png" in body["object_key"]
+    assert "/" in body["object_key"]
+    assert storage.presign_calls == [("photo.png", "image/png")]
+
+
+def test_presign_valid_docx_returns_upload_url(monkeypatch) -> None:
+    storage = RecordingStorage(
+        result=PresignResult(
+            upload_url="https://r2.example/upload-docx",
+            object_key="abc/report.docx",
+            expires_in=900,
+        )
+    )
+    monkeypatch.setattr(
+        "memora_agent.api.files.files.get_r2_storage",
+        lambda: storage,
+    )
+    client = authed_client()
+
+    response = client.post(
+        "/files/presign",
+        json={
+            "filename": "report.docx",
+            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "size": 2048,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["upload_url"] == "https://r2.example/upload-docx"
+    assert storage.presign_calls == [
+        (
+            "report.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    ]
+
+
+def test_presign_rejects_disallowed_extension(monkeypatch) -> None:
+    storage = RecordingStorage()
+    monkeypatch.setattr(
+        "memora_agent.api.files.files.get_r2_storage",
+        lambda: storage,
+    )
+    client = authed_client()
+
+    response = client.post(
+        "/files/presign",
+        json={
+            "filename": "notes.exe",
+            "content_type": "application/octet-stream",
             "size": 1024,
         },
     )
@@ -242,6 +307,43 @@ def test_complete_returns_declared_file_info_and_download_url(monkeypatch) -> No
     assert body["expires_in"] > 0
     assert storage.presign_get_calls == ["abc/notes.pdf"]
     assert storage.presign_calls == []
+
+
+def test_complete_passes_user_id_and_size_into_ingest(monkeypatch) -> None:
+    storage = RecordingStorage()
+    captured: list[tuple] = []
+
+    async def fake_build(*args, **kwargs):
+        captured.append(args)
+
+    monkeypatch.setattr(
+        "memora_agent.api.files.files.get_r2_storage",
+        lambda: storage,
+    )
+    monkeypatch.setattr(
+        "memora_agent.api.files.files.RagService.build_knowledge_base",
+        fake_build,
+    )
+    client = authed_client()
+    payload = {
+        "object_key": "abc/notes.pdf",
+        "filename": "notes.pdf",
+        "content_type": "application/pdf",
+        "size": 1_048_576,
+    }
+
+    response = client.post("/files/complete", json=payload)
+
+    assert response.status_code == 200
+    assert captured == [
+        (
+            "https://r2.example/download",
+            "abc/notes.pdf",
+            "notes.pdf",
+            1,
+            1_048_576,
+        )
+    ]
 
 
 def test_complete_missing_object_key_is_422(monkeypatch) -> None:

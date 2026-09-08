@@ -1,10 +1,4 @@
-# llm-provider Specification
-
-## Purpose
-
-让调用方列出已配置的聊天模型供应商，并用供应商类型加模型名构造客户端，向量模型与聊天模型分开获取。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Caller can list configured chat providers
 
@@ -49,19 +43,7 @@ The system SHALL construct a chat client when given a configured provider instan
 - **WHEN** a caller requests a chat model from an instance whose `type` is `openai` and the environment name in that instance's `api_key_env` is missing or blank
 - **THEN** construction fails with an error that names that environment variable
 
-### Requirement: Embeddings are constructed separately from chat models
-
-The system SHALL construct an embedding client only through an embeddings entry that takes a provider name and an embedding model name from that provider's `embed_models` list. Requesting an embedding model name through the chat-model entry MUST fail.
-
-#### Scenario: Known embedding model
-
-- **WHEN** a caller requests embeddings for a name listed in a provider's `embed_models`
-- **THEN** the constructed client uses that model name and the provider `base_url`
-
-#### Scenario: Embedding name rejected by chat entry
-
-- **WHEN** a caller requests a chat model using a name that exists only in `embed_models`
-- **THEN** construction fails with an error that names the provider and the missing model
+## ADDED Requirements
 
 ### Requirement: Client kind comes from the provider table type
 

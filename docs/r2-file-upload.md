@@ -72,7 +72,7 @@ https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com
 
 region 对 R2 固定写 `auto`。见 `R2Storage.presign_put` 和 `presign_get`。
 
-`object_key` 的形状是 `{uuid4()}/{原文件名}`，例如 `3f2a.../notes.pdf`。若 `.env` 填了 `R2_KEY_PREFIX`，则变成 `{前缀}/{uuid4()}/{原文件名}`，例如 `knowledge-base/3f2a.../notes.pdf`。前面的 UUID 避免两人上传同名文件时互相覆盖；后面的文件名以后还能还原。
+`object_key` 的形状是 `{uuid4()}/{原文件名}`，例如 `3f2a.../notes.pdf`。若 `.env` 填了 `R2_KEY_PREFIX`，则变成 `{前缀}/{uuid4()}/{原文件名}`，例如 `knowledge-base/3f2a.../notes.pdf`。每个文件独占这一段前缀；MinerU 抽出来的配图由后端 `put_object` 写到同一前缀下的 `images/`，例如 `3f2a.../images/fig.jpg`。前面的 UUID 避免两人上传同名文件时互相覆盖；后面的文件名以后还能还原。
 
 PUT 有效期 900 秒（15 分钟），`presign` 响应里的 `expires_in` 就是这个数。前端必须在过期前 `PUT`。
 
@@ -89,8 +89,11 @@ GET 有效期 3600 秒（1 小时），`complete` 响应里的 `expires_in` 是�
 | 扩展名 | 允许的 content_type | 大小 |
 |--------|---------------------|------|
 | `.pdf` | `application/pdf` | 1 ～ 104857600 字节（100 MiB） |
+| `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | 同上 |
 | `.md`  | `text/markdown` 或 `text/plain` | 同上 |
 | `.txt` | `text/plain` | 同上 |
+| `.png` | `image/png` | 同上 |
+| `.jpg` / `.jpeg` | `image/jpeg` | 同上 |
 
 `.md` 接受 `text/plain`，是因为很多浏览器选 markdown 时会报成纯文本。
 
@@ -164,7 +167,7 @@ R2_KEY_PREFIX=knowledge-base
    纯函数，不碰网络。单测在 `tests/storage/test_validate.py`。
 
 5. `src/memora_agent/storage/r2.py`  
-   唯一和 boto3 打交道的地方。构造客户端、拼 endpoint、签发 PUT / GET。测试用假客户端注入，不连真实 R2。
+   唯一和 boto3 打交道的地方。构造客户端、拼 endpoint、签发 PUT / GET，以及把配图 `put_object` 进同一文件前缀的 `images/`。测试用假客户端注入，不连真实 R2。
 
 6. `src/memora_agent/core/config.py`  
    `Config` 先合并一次环境，再通过 `load_r2()`、`load_mineru()`、`load_mysql()`、`load_llm()` 等方法生成分组配置。调用方直接读取 `config.r2`；它把空值收成 `None`，并拼出 `endpoint_url`。

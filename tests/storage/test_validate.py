@@ -19,9 +19,29 @@ def test_valid_txt_is_accepted() -> None:
     validate_declaration("notes.txt", "text/plain", 1)
 
 
+def test_valid_png_is_accepted() -> None:
+    validate_declaration("photo.png", "image/png", 1024)
+
+
+def test_valid_jpeg_is_accepted() -> None:
+    validate_declaration("photo.jpeg", "image/jpeg", 2048)
+
+
+def test_valid_jpg_is_accepted() -> None:
+    validate_declaration("photo.jpg", "image/jpeg", 2048)
+
+
+def test_valid_docx_is_accepted() -> None:
+    validate_declaration(
+        "report.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        2048,
+    )
+
+
 def test_disallowed_extension_is_rejected() -> None:
     with pytest.raises(FileDeclarationError, match="仅支持"):
-        validate_declaration("photo.png", "image/png", 1024)
+        validate_declaration("notes.exe", "application/octet-stream", 1024)
 
 
 def test_content_type_mismatch_is_rejected() -> None:

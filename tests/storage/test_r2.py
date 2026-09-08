@@ -10,12 +10,16 @@ from memora_agent.storage.r2 import (
 class FakeS3Client:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict, int]] = []
+        self.put_calls: list[dict] = []
 
     def generate_presigned_url(self, operation, Params, ExpiresIn):
         self.calls.append((operation, Params, ExpiresIn))
         if operation == "get_object":
             return "https://r2.example/download"
         return "https://r2.example/upload"
+
+    def put_object(self, **kwargs):
+        self.put_calls.append(kwargs)
 
 
 def make_config() -> R2Config:
@@ -34,6 +38,7 @@ def test_presign_put_returns_url_key_and_expiry() -> None:
     result = storage.presign_put("notes.pdf", "application/pdf")
 
     assert result.upload_url == "https://r2.example/upload"
+    assert "/" in result.object_key
     assert result.object_key.endswith("notes.pdf")
     assert result.expires_in == PRESIGN_EXPIRES_IN
     assert client.calls == [
@@ -58,6 +63,7 @@ def test_presign_put_uses_key_prefix() -> None:
     result = storage.presign_put("notes.pdf", "application/pdf")
 
     assert result.object_key.startswith("knowledge-base/")
+    assert "/" in result.object_key.removeprefix("knowledge-base/")
     assert result.object_key.endswith("notes.pdf")
     assert client.calls[0][1]["Key"] == result.object_key
 
@@ -99,6 +105,33 @@ def test_presign_get_requires_complete_config() -> None:
 
     try:
         storage.presign_get("abc/notes.pdf")
+    except R2ConfigError as exc:
+        assert "R2" in str(exc)
+    else:
+        raise AssertionError("expected R2ConfigError")
+
+
+def test_put_object_writes_bucket_key_and_type() -> None:
+    client = FakeS3Client()
+    storage = R2Storage(make_config(), client=client)
+
+    storage.put_object("abc/images/fig.jpg", b"img-bytes", "image/jpeg")
+
+    assert client.put_calls == [
+        {
+            "Bucket": "memora-files",
+            "Key": "abc/images/fig.jpg",
+            "Body": b"img-bytes",
+            "ContentType": "image/jpeg",
+        }
+    ]
+
+
+def test_put_object_requires_complete_config() -> None:
+    storage = R2Storage(R2Config(), client=FakeS3Client())
+
+    try:
+        storage.put_object("abc/images/fig.jpg", b"img-bytes", "image/jpeg")
     except R2ConfigError as exc:
         assert "R2" in str(exc)
     else:

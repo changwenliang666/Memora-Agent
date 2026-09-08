@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from memora_agent.core.auth import get_current_user
 from memora_agent.core.config import config
 from memora_agent.schema.files import (
     CompleteRequest,
@@ -11,7 +12,6 @@ from memora_agent.storage.validate import FileDeclarationError, validate_declara
 from memora_agent.service.rag_service import RagService
 from fastapi import BackgroundTasks
 from memora_agent.schema.response import ResponseStructure
-from memora_agent.schema.bizcode import BizCode
 
 files_router = APIRouter(
     prefix="/files",
@@ -49,23 +49,21 @@ async def presign(request: PresignRequest) -> PresignResponse:
 
 @files_router.post("/complete", response_model=ResponseStructure[FileInfo])
 async def complete(request: CompleteRequest, background_tasks: BackgroundTasks):
-    """按申报的 object_key 签发短时 GET，不读桶、不落库。
-
-    download_url 可直接交给 MinerU loader。以后入库加在 return 之前即可。
-    """
+    """按申报的 object_key 签发短时 GET，不读桶。建库在后台做，请求内不写库。"""
     try:
         result = get_r2_storage().presign_get(request.object_key)
-    except Exception:
-        return ResponseStructure[FileInfo](
-            code=BizCode.R2_CONFIG_ERROR.value,
-            message="获取文档信息失败",
-        )
+    except R2ConfigError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    user = get_current_user()
     background_tasks.add_task(
         RagService.build_knowledge_base,
         result.download_url,
         request.object_key,
         request.filename,
+        user.id,
+        user.username,
+        request.size,
     )
     return ResponseStructure[FileInfo](
         message="文档正在处理中...",

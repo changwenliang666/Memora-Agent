@@ -3,8 +3,14 @@ from pathlib import Path
 MAX_UPLOAD_SIZE = 104_857_600
 ALLOWED_CONTENT_TYPES: dict[str, frozenset[str]] = {
     ".pdf": frozenset({"application/pdf"}),
+    ".docx": frozenset(
+        {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+    ),
     ".md": frozenset({"text/markdown", "text/plain"}),
     ".txt": frozenset({"text/plain"}),
+    ".png": frozenset({"image/png"}),
+    ".jpg": frozenset({"image/jpeg"}),
+    ".jpeg": frozenset({"image/jpeg"}),
 }
 
 
@@ -25,7 +31,7 @@ def validate_declaration(filename: str, content_type: str, size: int) -> None:
     suffix = Path(filename).suffix.lower()
     allowed_types = ALLOWED_CONTENT_TYPES.get(suffix)
     if allowed_types is None:
-        raise FileDeclarationError("仅支持 .pdf、.md、.txt")
+        raise FileDeclarationError("仅支持 .pdf、.docx、.md、.txt、.png、.jpg、.jpeg")
 
     normalized_type = _normalized_content_type(content_type)
     if normalized_type not in allowed_types:

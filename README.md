@@ -19,7 +19,7 @@
 
 ## 特性
 
-- **多模型提供商**：`ollama`（本地）与 `openai`（OpenAI 兼容，当前配置为 DeepSeek），每个 Provider 可配置多个模型
+- **多模型提供商**：`ollama`（本地）、`deepseek` 与 `qwen`（均为 OpenAI 兼容协议），每个实例可配置多个模型
 - **规则校验**：按主题词 + 动作意图拦截不支持的问题
 - **意图分类**：Few-shot 分类为 `history` / `weather` / `other`，低置信度时拒绝回答
 - **工具调用循环**：最多 `max_round` 轮；同步 / 异步工具统一走 `ainvoke`
@@ -58,28 +58,39 @@ config.jwt.secret
 config.llm["ollama"]
 ```
 
-模型清单在 `config/models.toml`。每个供应商一张表，`models` 是聊天模型名列表，`embed_models` 是向量模型名。`base_url` 按配置原样传给客户端。
+模型清单在 `config/models.toml`。每个供应商一张表，表名是实例名，`type` 是客户端种类（`ollama` 或 `openai` 兼容协议）。`models` 是聊天模型名列表，`embed_models` 是向量模型名。`base_url` 按配置原样传给客户端。
 
 ```toml
 [ollama]
+type = "ollama"
 base_url = "http://127.0.0.1:11434"
 think = false
 temperature = 0.7
 models = ["qwen3.5:4b-mlx", "qwen3.5:2b"]
 embed_models = ["mxbai-embed-large:latest"]
 
-[openai]
+[deepseek]
+type = "openai"
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
 think = false
 temperature = 0.7
 models = ["deepseek-v4-flash", "deepseek-chat"]
+
+[qwen]
+type = "openai"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key_env = "QWEN_API_KEY"
+think = false
+temperature = 0.7
+models = ["qwen3.8-max"]
 ```
 
 `think` 和 `temperature` 是供应商级默认值。在线密钥不写入 TOML，只在 `.env` 中配置：
 
 ```env
 DEEPSEEK_API_KEY=sk-your-key
+QWEN_API_KEY=sk-your-key
 JWT_SECRET=dev-only-change-me-jwt-secret-min-32b
 JWT_EXPIRE_MINUTES=10080
 ```
@@ -270,7 +281,7 @@ uv run pytest
 ```
 
 新增聊天模型时，只需把名字加进 `config/models.toml` 对应供应商的 `models` 列表。
-调用 `/chat/agent` 时传入 `"ollama"` 或 `"openai"` 以及对应模型名即可切换。
+调用 `/chat/agent` 时传入 `"ollama"`、`"deepseek"` 或 `"qwen"` 以及对应模型名即可切换。
 
 ## License
 

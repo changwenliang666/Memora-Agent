@@ -1,13 +1,24 @@
 [ollama]
+type = "ollama"
 base_url = "http://127.0.0.1:11434"
 think = false
 temperature = 0.7
 models = ["qwen3.5:4b-mlx", "qwen3.5:2b"]
 embed_models = ["mxbai-embed-large:latest"]
 
-[openai]
+[deepseek]
+type = "openai"
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
 think = false
 temperature = 0.7
 models = ["deepseek-v4-flash", "deepseek-chat"]
+
+[qwen]
+type = "openai"
+base_url = "https://ws-g07nrgi2vqgr2idm.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+api_key_env = "QWEN_API_KEY"
+think = false
+temperature = 0.7
+models = ["qwen3.8-max","qwen3.5-plus",]
+embed_models = ["qwen3.7-text-embedding", "qwen3.7-text-rerank"]

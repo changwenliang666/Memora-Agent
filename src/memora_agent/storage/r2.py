@@ -52,8 +52,8 @@ class R2Storage:
         密钥留在服务端；前端只拿到一段短时有效的 URL，文件字节也不经过本进程。
         """
         self._require_config()
-        # 生成唯一的object_key，前缀-文件名，避免重名文件衝突
-        object_key = f"{uuid4()}-{filename}"
+        # 每个文件一个前缀文件夹，原始文件和后续配图共用这一段。
+        object_key = f"{uuid4()}/{filename}"
         prefix = (self._config.key_prefix or "").strip("/")
         if prefix:
             object_key = f"{prefix}/{object_key}"
@@ -90,4 +90,14 @@ class R2Storage:
             download_url=download_url,
             object_key=object_key,
             expires_in=PRESIGN_GET_EXPIRES_IN,
+        )
+
+    def put_object(self, object_key: str, body: bytes, content_type: str) -> None:
+        """把字节写入桶。配图拷贝走这条路径，原始文件仍由前端预签名 PUT。"""
+        self._require_config()
+        self._s3_client().put_object(
+            Bucket=self._config.bucket_name,
+            Key=object_key,
+            Body=body,
+            ContentType=content_type,
         )

@@ -116,11 +116,18 @@ def test_config_exposes_named_groups_with_defaults(env_file: Path) -> None:
 def test_model_catalog_loads_from_flat_toml(env_file: Path) -> None:
     config = load_config(env_file)
     ollama = config.llm["ollama"]
-    openai = config.llm["openai"]
+    deepseek = config.llm["deepseek"]
+    qwen = config.llm["qwen"]
 
     assert ollama.models == ["qwen3.5:4b-mlx", "qwen3.5:2b"]
     assert ollama.embed_models == ["mxbai-embed-large:latest"]
-    assert openai.models == ["deepseek-v4-flash", "deepseek-chat"]
+    assert ollama.type == "ollama"
+    assert deepseek.models == ["deepseek-v4-flash", "deepseek-chat"]
+    assert deepseek.type == "openai"
+    assert deepseek.api_key_env == "DEEPSEEK_API_KEY"
+    assert qwen.models == ["qwen3.8-max"]
+    assert qwen.type == "openai"
+    assert qwen.api_key_env == "QWEN_API_KEY"
     assert "mxbai-embed-large:latest" not in ollama.models
 
 

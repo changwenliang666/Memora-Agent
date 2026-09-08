@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from memora_agent.schema.tools import ToolsDictList
 
-ProviderType = Literal["ollama", "openai"]
+ClientType = Literal["ollama", "openai"]
 
 
 class MysqlConfig(BaseModel):
@@ -68,6 +68,7 @@ class MineruConfig(BaseModel):
 
 
 class ProviderConfig(BaseModel):
+    type: ClientType
     base_url: str
     api_key_env: str | None = None
     think: bool = False
@@ -77,7 +78,7 @@ class ProviderConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    provider_type: ProviderType
+    provider_type: str
     model_name: str = Field(min_length=1)
     tools: ToolsDictList = Field(
         default_factory=lambda: ToolsDictList(tools_prompt="", tools_list=[])

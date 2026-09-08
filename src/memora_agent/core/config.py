@@ -3,6 +3,7 @@ import tomllib
 from pathlib import Path
 
 from dotenv import dotenv_values
+from pydantic import ValidationError
 
 from memora_agent.schema.config import (
     FeishuConfig,
@@ -113,8 +114,12 @@ class Config:
 
         providers: dict[str, ProviderConfig] = {}
         for name, provider in raw.items():
-            providers[name] = ProviderConfig.model_validate(provider)
+            try:
+                providers[name] = ProviderConfig.model_validate(provider)
+            except ValidationError as exc:
+                raise ValueError(f"Provider {name} 配置无效: {exc}") from exc
         return providers
+
     def load_feishu(self) -> FeishuConfig:
         return FeishuConfig(
             webhook_url=self.get("FEISHU_WEBHOOK_URL"),

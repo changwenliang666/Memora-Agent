@@ -6,7 +6,7 @@ class EmbeddingService:
     def __init__(self):
         self.provider = LLMProvider()
         self.embeddings = self.provider.get_embeddings(
-            "ollama", "mxbai-embed-large:latest"
+            "qwen", "qwen3.7-text-embedding"
         )
 
     def embed_query(self, text: str):
