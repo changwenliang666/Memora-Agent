@@ -1,4 +1,4 @@
-from memora_agent.schema.chat import ChatRequest
+from app.schema.chat import ChatRequest
 
 
 def test_request_can_select_model() -> None:

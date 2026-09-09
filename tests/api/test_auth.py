@@ -2,10 +2,10 @@ from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
 
-from memora_agent.core.auth import create_access_token, hash_password
-from memora_agent.main import app
-from memora_agent.schema.bizcode import BizCode
-from memora_agent.service.user_service import UserAlreadyExistsError, userService
+from app.core.auth import create_access_token, hash_password
+from app.main import app
+from app.schema.bizcode import BizCode
+from app.service.user_service import UserAlreadyExistsError, userService
 
 
 def bearer_headers(user_id: int = 1, username: str = "tester") -> dict[str, str]:
@@ -17,6 +17,7 @@ class FakeUser:
     id: int
     username: str
     password: str
+    nickname: str = ""
 
 
 def test_register_creates_user_without_password(monkeypatch) -> None:
@@ -166,7 +167,7 @@ def test_openapi_is_public() -> None:
 
 
 def test_protected_route_accepts_valid_token(monkeypatch) -> None:
-    from memora_agent.storage.r2 import PresignResult
+    from app.storage.r2 import PresignResult
 
     class Storage:
         def presign_put(self, filename: str, content_type: str) -> PresignResult:
@@ -177,7 +178,7 @@ def test_protected_route_accepts_valid_token(monkeypatch) -> None:
             )
 
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: Storage(),
     )
     client = TestClient(app)

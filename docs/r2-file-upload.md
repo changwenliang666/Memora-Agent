@@ -14,7 +14,7 @@
 - R2 的 Access Key / Secret 必须出现在「整段上传」这条链路上，暴露面更大。
 - Agent 服务的职责是对话，不是文件中转站。
 
-所以采用 **直传**：本服务只签发一个短时有效的上传地址，浏览器拿着这个地址 `PUT` 到 R2。文件字节从不进入 `memora_agent` 进程。
+所以采用 **直传**：本服务只签发一个短时有效的上传地址，浏览器拿着这个地址 `PUT` 到 R2。文件字节从不进入 `app` 进程。
 
 密钥始终留在服务端的 `.env` 里。前端拿到的只是一段签过名的 URL，过期后就不能再上传。
 
@@ -48,9 +48,9 @@
 
 | 步骤 | 谁做 | 文件 |
 |------|------|------|
-| 校验申报 | 后端 | `src/memora_agent/storage/validate.py` |
-| 签发 URL | 后端 | `src/memora_agent/storage/r2.py` |
-| HTTP 入口 | 后端 | `src/memora_agent/api/files/files.py` |
+| 校验申报 | 后端 | `src/app/storage/validate.py` |
+| 签发 URL | 后端 | `src/app/storage/r2.py` |
+| HTTP 入口 | 后端 | `src/app/api/files/files.py` |
 | 真正传文件 | 前端 / 浏览器 | 本仓库没有前端，用 curl 或网页 `PUT` |
 | 回传元数据 + 短时 GET | 后端 | `files.py` 的 `complete`，`R2Storage.presign_get` |
 
@@ -127,7 +127,7 @@ R2_KEY_PREFIX=knowledge-base
 
 `R2_KEY_PREFIX` 可选。R2 没有真正的文件夹，前缀就是控制台里看到的目录。不填则对象直接落在桶根下。
 
-读取逻辑在 `src/memora_agent/core/config.py` 的 `Config` 类：构造时只读取一次 `.env`，再用进程环境覆盖同名值。`load_r2()` 明确读取五个 R2 环境变量并生成 `config.r2`，空字符串当成“没填”。
+读取逻辑在 `src/app/core/config.py` 的 `Config` 类：构造时只读取一次 `.env`，再用进程环境覆盖同名值。`load_r2()` 明确读取五个 R2 环境变量并生成 `config.r2`，空字符串当成“没填”。
 
 四个值没填齐时，**进程能启动**，校验单测也能跑；只有调用 `presign` 或 `complete` 才会返回 HTTP 500，提示去填占位。这是有意的：不要让缺 R2 配置把整个 Agent 服务拖死。
 
@@ -153,23 +153,23 @@ R2_KEY_PREFIX=knowledge-base
 
 从外往里：
 
-1. `src/memora_agent/main.py`  
+1. `src/app/main.py`  
    把 `/files` 和 `/chat` 并列挂上。文件能力和对话能力是两条线。
 
-2. `src/memora_agent/api/files/files.py`  
+2. `src/app/api/files/files.py`  
    薄路由。`presign`：先 `validate_declaration`，再 `R2Storage.presign_put`。失败是 400，缺配置是 500。  
    `complete`：用申报的 `object_key` 调 `presign_get`，返回申报四字段加上 `download_url` / `expires_in`。不读对象字节。这个 URL 可以直接传给 `MinerULoader(source=url)`。
 
-3. `src/memora_agent/schema/files.py`  
+3. `src/app/schema/files.py`  
    `PresignRequest` / `CompleteRequest` / `FileInfo` / `PresignResponse`。缺字段由 Pydantic / FastAPI 直接 422。
 
-4. `src/memora_agent/storage/validate.py`  
+4. `src/app/storage/validate.py`  
    纯函数，不碰网络。单测在 `tests/storage/test_validate.py`。
 
-5. `src/memora_agent/storage/r2.py`  
+5. `src/app/storage/r2.py`  
    唯一和 boto3 打交道的地方。构造客户端、拼 endpoint、签发 PUT / GET，以及把配图 `put_object` 进同一文件前缀的 `images/`。测试用假客户端注入，不连真实 R2。
 
-6. `src/memora_agent/core/config.py`  
+6. `src/app/core/config.py`  
    `Config` 先合并一次环境，再通过 `load_r2()`、`load_mineru()`、`load_mysql()`、`load_llm()` 等方法生成分组配置。调用方直接读取 `config.r2`；它把空值收成 `None`，并拼出 `endpoint_url`。
 
 7. `tests/api/test_files.py`  
@@ -199,7 +199,7 @@ R2_KEY_PREFIX=knowledge-base
 1. `uv sync`
 2. 填写 `.env` 的四个 R2 字段
 3. 桶上配好 CORS
-4. `uv run uvicorn memora_agent.main:app --reload`
+4. `uv run uvicorn app.main:app --reload`
 5. 打开 `http://127.0.0.1:8000/docs`，先注册或登录拿到 JWT，再调 `/files/presign`（Header 带 `Authorization: Bearer`），用返回的 `upload_url` 做 `PUT`，最后调 `/files/complete`
 
 没有前端时，第二步可以用 curl：

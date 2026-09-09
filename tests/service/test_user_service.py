@@ -4,9 +4,9 @@ from sqlalchemy.exc import IntegrityError
 
 import pytest
 
-from memora_agent.core.auth import verify_password
-from memora_agent.db.models.user import User
-from memora_agent.service.user_service import UserAlreadyExistsError, UserService
+from app.core.auth import verify_password
+from app.db.models.user import User
+from app.service.user_service import UserAlreadyExistsError, UserService
 
 
 class FakeResult:
@@ -58,7 +58,7 @@ class FakeSession:
 def test_create_user_stores_hashed_password(monkeypatch) -> None:
     session = FakeSession()
     monkeypatch.setattr(
-        "memora_agent.service.user_service.AsyncSessionLocal",
+        "app.service.user_service.AsyncSessionLocal",
         lambda: session,
     )
     service = UserService()
@@ -77,7 +77,7 @@ def test_create_user_stores_hashed_password(monkeypatch) -> None:
 def test_create_user_duplicate_username(monkeypatch) -> None:
     session = FakeSession(commit_error=IntegrityError("insert", {}, None))
     monkeypatch.setattr(
-        "memora_agent.service.user_service.AsyncSessionLocal",
+        "app.service.user_service.AsyncSessionLocal",
         lambda: session,
     )
     service = UserService()

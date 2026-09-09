@@ -1,10 +1,10 @@
 from fastapi.testclient import TestClient
 
-from memora_agent.core.auth import create_access_token
-from memora_agent.main import app
-from memora_agent.schema.bizcode import BizCode
-from memora_agent.storage.r2 import PresignGetResult, PresignResult, R2ConfigError
-from memora_agent.storage.validate import MAX_UPLOAD_SIZE
+from app.core.auth import create_access_token
+from app.main import app
+from app.schema.bizcode import BizCode
+from app.storage.r2 import PresignGetResult, PresignResult, R2ConfigError
+from app.storage.validate import MAX_UPLOAD_SIZE
 
 
 def bearer_headers(user_id: int = 1, username: str = "tester") -> dict[str, str]:
@@ -56,7 +56,7 @@ class RecordingStorage:
 def test_presign_valid_pdf_returns_upload_url(monkeypatch) -> None:
     storage = RecordingStorage()
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -88,7 +88,7 @@ def test_presign_valid_markdown_returns_upload_url(monkeypatch) -> None:
         )
     )
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -115,7 +115,7 @@ def test_presign_valid_png_returns_upload_url(monkeypatch) -> None:
         )
     )
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -146,7 +146,7 @@ def test_presign_valid_docx_returns_upload_url(monkeypatch) -> None:
         )
     )
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -173,7 +173,7 @@ def test_presign_valid_docx_returns_upload_url(monkeypatch) -> None:
 def test_presign_rejects_disallowed_extension(monkeypatch) -> None:
     storage = RecordingStorage()
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -195,7 +195,7 @@ def test_presign_rejects_disallowed_extension(monkeypatch) -> None:
 def test_presign_rejects_size_above_limit(monkeypatch) -> None:
     storage = RecordingStorage()
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -217,7 +217,7 @@ def test_presign_rejects_size_above_limit(monkeypatch) -> None:
 def test_presign_rejects_zero_size(monkeypatch) -> None:
     storage = RecordingStorage()
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -238,7 +238,7 @@ def test_presign_rejects_zero_size(monkeypatch) -> None:
 def test_presign_rejects_content_type_mismatch(monkeypatch) -> None:
     storage = RecordingStorage()
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -259,7 +259,7 @@ def test_presign_rejects_content_type_mismatch(monkeypatch) -> None:
 def test_presign_missing_r2_config_returns_500(monkeypatch) -> None:
     storage = RecordingStorage(error=R2ConfigError("R2 配置不完整"))
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -280,11 +280,11 @@ def test_presign_missing_r2_config_returns_500(monkeypatch) -> None:
 def test_complete_returns_declared_file_info_and_download_url(monkeypatch) -> None:
     storage = RecordingStorage()
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     monkeypatch.setattr(
-        "memora_agent.api.files.files.RagService.build_knowledge_base",
+        "app.api.files.files.RagService.build_knowledge_base",
         lambda *args: None,
     )
     client = authed_client()
@@ -317,11 +317,11 @@ def test_complete_passes_user_id_and_size_into_ingest(monkeypatch) -> None:
         captured.append(args)
 
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     monkeypatch.setattr(
-        "memora_agent.api.files.files.RagService.build_knowledge_base",
+        "app.api.files.files.RagService.build_knowledge_base",
         fake_build,
     )
     client = authed_client()
@@ -341,6 +341,7 @@ def test_complete_passes_user_id_and_size_into_ingest(monkeypatch) -> None:
             "abc/notes.pdf",
             "notes.pdf",
             1,
+            "tester",
             1_048_576,
         )
     ]
@@ -349,7 +350,7 @@ def test_complete_passes_user_id_and_size_into_ingest(monkeypatch) -> None:
 def test_complete_missing_object_key_is_422(monkeypatch) -> None:
     storage = RecordingStorage()
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()
@@ -371,7 +372,7 @@ def test_complete_missing_object_key_is_422(monkeypatch) -> None:
 def test_complete_missing_r2_config_returns_500(monkeypatch) -> None:
     storage = RecordingStorage(get_error=R2ConfigError("R2 配置不完整"))
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = authed_client()

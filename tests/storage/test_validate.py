@@ -1,6 +1,6 @@
 import pytest
 
-from memora_agent.storage.validate import FileDeclarationError, validate_declaration
+from app.storage.validate import FileDeclarationError, validate_declaration
 
 
 def test_valid_pdf_is_accepted() -> None:

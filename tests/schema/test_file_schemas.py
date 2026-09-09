@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from memora_agent.schema.files import CompleteRequest, FileInfo, PresignRequest
+from app.schema.files import CompleteRequest, FileInfo, PresignRequest
 
 
 def test_presign_request_requires_fields() -> None:

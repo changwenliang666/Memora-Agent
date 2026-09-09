@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-import memora_agent.core.provider as provider_module
-from memora_agent.core.config import Config, MODELS_CONFIG_FILE
-from memora_agent.core.provider import LLMProvider
+import app.core.provider as provider_module
+from app.core.config import Config, MODELS_CONFIG_FILE
+from app.core.provider import LLMProvider
 
 
 MODELS_TOML = """

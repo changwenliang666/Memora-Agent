@@ -1,5 +1,5 @@
-from memora_agent.schema.config import R2Config
-from memora_agent.storage.r2 import (
+from app.schema.config import R2Config
+from app.storage.r2 import (
     PRESIGN_EXPIRES_IN,
     PRESIGN_GET_EXPIRES_IN,
     R2ConfigError,

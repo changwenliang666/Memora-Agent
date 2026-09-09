@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-import memora_agent.core.config as config_module
-from memora_agent.core.config import Config, MODELS_CONFIG_FILE
+import app.core.config as config_module
+from app.core.config import Config, MODELS_CONFIG_FILE
 
 ENV_NAMES = (
     "APP_ENV",
@@ -125,7 +125,7 @@ def test_model_catalog_loads_from_flat_toml(env_file: Path) -> None:
     assert deepseek.models == ["deepseek-v4-flash", "deepseek-chat"]
     assert deepseek.type == "openai"
     assert deepseek.api_key_env == "DEEPSEEK_API_KEY"
-    assert qwen.models == ["qwen3.8-max"]
+    assert qwen.models == ["qwen3.8-max", "qwen3.5-plus"]
     assert qwen.type == "openai"
     assert qwen.api_key_env == "QWEN_API_KEY"
     assert "mxbai-embed-large:latest" not in ollama.models

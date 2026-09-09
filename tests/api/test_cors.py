@@ -1,8 +1,8 @@
 from fastapi.testclient import TestClient
 
-from memora_agent.core.auth import create_access_token
-from memora_agent.main import app
-from memora_agent.storage.r2 import PresignResult
+from app.core.auth import create_access_token
+from app.main import app
+from app.storage.r2 import PresignResult
 
 
 def bearer_headers(user_id: int = 1, username: str = "tester") -> dict[str, str]:
@@ -46,7 +46,7 @@ def test_presign_preflight_allows_any_origin_and_method() -> None:
 def test_cross_origin_post_includes_cors_headers(monkeypatch) -> None:
     storage = RecordingStorage()
     monkeypatch.setattr(
-        "memora_agent.api.files.files.get_r2_storage",
+        "app.api.files.files.get_r2_storage",
         lambda: storage,
     )
     client = TestClient(app)

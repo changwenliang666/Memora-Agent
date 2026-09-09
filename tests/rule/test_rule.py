@@ -1,6 +1,6 @@
 import pytest
 
-from memora_agent.rule import Rule, normalize_text
+from app.rule import Rule, normalize_text
 
 
 @pytest.mark.parametrize(

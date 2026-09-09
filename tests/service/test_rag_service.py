@@ -4,9 +4,9 @@ from types import SimpleNamespace
 from langchain_core.documents import Document
 from qdrant_client.models import UpdateStatus
 
-from memora_agent.db.models.knowledge_file import KnowledgeFile
-from memora_agent.schema.config import MineruConfig
-from memora_agent.service.rag_service import ImageOcrItem, PreparedIngest, RagService
+from app.db.models.knowledge_file import KnowledgeFile
+from app.schema.config import MineruConfig
+from app.service.rag_service import ImageOcrItem, PreparedIngest, RagService
 
 
 class BoomLoader:
@@ -23,7 +23,12 @@ class FakeLoader:
     def load(self):
         return [
             Document(
-                page_content="# Title\n\n![ok](https://cdn.example/ok.jpg)\n\n![bad](https://cdn.example/bad.jpg)"
+                page_content=(
+                    "# Title\n\n"
+                    "![ok](https://cdn.example/ok.jpg)\n\n"
+                    "![deco](https://cdn.example/deco.jpg)\n\n"
+                    "![bad](https://cdn.example/bad.jpg)"
+                )
             )
         ]
 
@@ -31,9 +36,16 @@ class FakeLoader:
 class FakeOcr:
     def __init__(self):
         self.calls: list[str] = []
+        self.figure_calls: list[str] = []
 
     async def invoke(self, image_url: str) -> str:
         self.calls.append(image_url)
+        return "公司 Logo"
+
+    async def invoke_markdown_figure(self, image_url: str) -> str | None:
+        self.figure_calls.append(image_url)
+        if "deco" in image_url or "skip" in image_url:
+            return None
         if "bad" in image_url:
             raise RuntimeError("ocr failed")
         return "图中有一只猫"
@@ -88,9 +100,9 @@ class FakeQdrant:
 
 
 def test_prepare_ingest_txt_skips_mineru(monkeypatch) -> None:
-    monkeypatch.setattr("memora_agent.service.rag_service.MinerULoader", BoomLoader)
+    monkeypatch.setattr("app.service.rag_service.MinerULoader", BoomLoader)
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.httpx.get",
+        "app.service.rag_service.httpx.get",
         lambda url, **kwargs: FakeResponse("hello txt".encode("utf-8")),
     )
 
@@ -111,10 +123,10 @@ def test_prepare_ingest_txt_skips_mineru(monkeypatch) -> None:
 
 def test_prepare_ingest_png_skips_mineru(monkeypatch) -> None:
     ocr = FakeOcr()
-    monkeypatch.setattr("memora_agent.service.rag_service.MinerULoader", BoomLoader)
-    monkeypatch.setattr("memora_agent.service.rag_service.OcrService", lambda: ocr)
+    monkeypatch.setattr("app.service.rag_service.MinerULoader", BoomLoader)
+    monkeypatch.setattr("app.service.rag_service.OcrService", lambda: ocr)
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.httpx.get",
+        "app.service.rag_service.httpx.get",
         lambda url, **kwargs: FakeResponse(b"\x89PNG"),
     )
 
@@ -129,28 +141,29 @@ def test_prepare_ingest_png_skips_mineru(monkeypatch) -> None:
     assert prepared.stored_markdown is None
     assert prepared.stored_plain_text is None
     assert prepared.stored_ocr_results == [
-        ImageOcrItem(image_key="abc/photo.png", text="图中有一只猫")
+        ImageOcrItem(image_key="abc/photo.png", text="公司 Logo")
     ]
-    assert prepared.text_for_embedding == "图中有一只猫"
+    assert prepared.text_for_embedding == "公司 Logo"
     assert prepared.stored_image_keys == []
     assert ocr.calls[0].startswith("data:image/png;base64,")
+    assert ocr.figure_calls == []
 
 
 def test_prepare_ingest_pdf_uses_mineru(monkeypatch) -> None:
     ocr = FakeOcr()
     puts: list[tuple[str, bytes, str]] = []
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.config.mineru",
+        "app.service.rag_service.config.mineru",
         MineruConfig(api_key="token"),
     )
-    monkeypatch.setattr("memora_agent.service.rag_service.MinerULoader", FakeLoader)
-    monkeypatch.setattr("memora_agent.service.rag_service.OcrService", lambda: ocr)
+    monkeypatch.setattr("app.service.rag_service.MinerULoader", FakeLoader)
+    monkeypatch.setattr("app.service.rag_service.OcrService", lambda: ocr)
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.R2Storage",
+        "app.service.rag_service.R2Storage",
         lambda *args, **kwargs: FakeR2Storage(puts),
     )
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.httpx.get",
+        "app.service.rag_service.httpx.get",
         lambda url, **kwargs: FakeResponse(b"img"),
     )
 
@@ -164,34 +177,38 @@ def test_prepare_ingest_pdf_uses_mineru(monkeypatch) -> None:
 
     assert prepared.stored_markdown is not None
     assert "![ok](https://cdn.example/ok.jpg)" in prepared.stored_markdown
+    assert "![deco](https://cdn.example/deco.jpg)" in prepared.stored_markdown
+    assert "![bad](https://cdn.example/bad.jpg)" in prepared.stored_markdown
     assert "图中有一只猫" in prepared.text_for_embedding
     assert "![ok]" not in prepared.text_for_embedding
+    assert "![deco]" not in prepared.text_for_embedding
     assert "![bad]" not in prepared.text_for_embedding
     assert prepared.stored_plain_text is None
     assert prepared.stored_ocr_results == [
         ImageOcrItem(image_key="folder/uuid/images/ok.jpg", text="图中有一只猫"),
-        ImageOcrItem(image_key="folder/uuid/images/bad.jpg", text=""),
     ]
     assert prepared.stored_image_keys == [
         "folder/uuid/images/ok.jpg",
-        "folder/uuid/images/bad.jpg",
     ]
+    assert len(ocr.figure_calls) == 3
+    assert ocr.calls == []
 
 
 def test_replace_images_with_ocr_keeps_going_after_one_failure(monkeypatch) -> None:
     ocr = FakeOcr()
     puts: list[tuple[str, bytes, str]] = []
-    monkeypatch.setattr("memora_agent.service.rag_service.OcrService", lambda: ocr)
+    monkeypatch.setattr("app.service.rag_service.OcrService", lambda: ocr)
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.R2Storage",
+        "app.service.rag_service.R2Storage",
         lambda *args, **kwargs: FakeR2Storage(puts),
     )
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.httpx.get",
+        "app.service.rag_service.httpx.get",
         lambda url, **kwargs: FakeResponse(b"img"),
     )
     markdown = (
         "前![ok](https://cdn.example/ok.jpg)中"
+        "![deco](https://cdn.example/deco.jpg)间"
         "![bad](https://cdn.example/bad.jpg)后"
     )
 
@@ -202,23 +219,25 @@ def test_replace_images_with_ocr_keeps_going_after_one_failure(monkeypatch) -> N
         replacement.text_for_embedding, "folder/uuid/notes.pdf", "notes.pdf"
     )
 
-    assert replacement.text_for_embedding == "前图中有一只猫中后"
+    assert replacement.text_for_embedding == "前图中有一只猫中间后"
     assert replacement.ocr_results == [
         ImageOcrItem(image_key="folder/uuid/images/ok.jpg", text="图中有一只猫"),
-        ImageOcrItem(image_key="folder/uuid/images/bad.jpg", text=""),
     ]
+    assert puts == [("folder/uuid/images/ok.jpg", b"img", "image/jpeg")]
     assert docs
     assert "图中有一只猫" in docs[0].page_content
+    assert "![deco]" not in replacement.text_for_embedding
+    assert "![bad]" not in replacement.text_for_embedding
 
 
 def test_copy_markdown_images_uses_file_prefix(monkeypatch) -> None:
     puts: list[tuple[str, bytes, str]] = []
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.R2Storage",
+        "app.service.rag_service.R2Storage",
         lambda *args, **kwargs: FakeR2Storage(puts),
     )
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.httpx.get",
+        "app.service.rag_service.httpx.get",
         lambda url, **kwargs: FakeResponse(b"img-bytes"),
     )
 
@@ -239,17 +258,17 @@ def test_copy_markdown_images_uses_file_prefix(monkeypatch) -> None:
 def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
     session = FakeSession()
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.AsyncSessionLocal",
+        "app.service.rag_service.AsyncSessionLocal",
         lambda: session,
     )
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.EmbeddingService",
+        "app.service.rag_service.EmbeddingService",
         lambda: FakeEmbedding(),
     )
     qdrant = FakeQdrant(UpdateStatus.COMPLETED)
-    monkeypatch.setattr("memora_agent.service.rag_service.qdrantService", qdrant)
+    monkeypatch.setattr("app.service.rag_service.qdrantService", qdrant)
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.WebhookService.send_knowledge_base_build_success",
+        "app.service.rag_service.WebhookService.send_knowledge_base_build_success",
         lambda filename, username: None,
     )
 
@@ -263,7 +282,7 @@ def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.RagService.prepare_ingest",
+        "app.service.rag_service.RagService.prepare_ingest",
         fake_prepare,
     )
 
@@ -294,15 +313,15 @@ def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
 def test_build_knowledge_base_skips_insert_when_upsert_fails(monkeypatch) -> None:
     session = FakeSession()
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.AsyncSessionLocal",
+        "app.service.rag_service.AsyncSessionLocal",
         lambda: session,
     )
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.EmbeddingService",
+        "app.service.rag_service.EmbeddingService",
         lambda: FakeEmbedding(),
     )
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.qdrantService",
+        "app.service.rag_service.qdrantService",
         FakeQdrant("failed"),
     )
 
@@ -316,7 +335,7 @@ def test_build_knowledge_base_skips_insert_when_upsert_fails(monkeypatch) -> Non
         )
 
     monkeypatch.setattr(
-        "memora_agent.service.rag_service.RagService.prepare_ingest",
+        "app.service.rag_service.RagService.prepare_ingest",
         fake_prepare,
     )
 

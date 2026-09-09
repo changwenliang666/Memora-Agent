@@ -1,7 +1,7 @@
 from sqlalchemy import JSON
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 
-from memora_agent.db.models.knowledge_file import KnowledgeFile
+from app.db.models.knowledge_file import KnowledgeFile
 
 
 def test_knowledge_file_columns() -> None:

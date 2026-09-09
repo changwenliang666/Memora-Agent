@@ -49,7 +49,7 @@ docker compose up -d
 运行时配置只走 `core.config.config`。`Config` 构造时只读取一次项目根 `.env`，再用进程环境覆盖同名值，然后通过 `load_mysql()`、`load_redis()`、`load_r2()`、`load_mineru()`、`load_jwt()`、`load_llm()` 等方法生成分组配置：
 
 ```python
-from memora_agent.core.config import config
+from app.core.config import config
 
 config.mysql.host
 config.r2.bucket_name
@@ -100,7 +100,7 @@ JWT_EXPIRE_MINUTES=10080
 使用本地 Ollama 时，需先启动 Ollama 并拉取 TOML 中对应的模型。
 
 ```bash
-uv run uvicorn memora_agent.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
 
 启动后访问：
@@ -180,7 +180,7 @@ curl -X POST http://127.0.0.1:8000/chat/agent \
 Memora-Agent/
 ├── config/
 │   └── models.toml                 # Provider 与模型清单
-├── src/memora_agent/
+├── src/app/
 │   ├── main.py                     # FastAPI 入口，挂载 /auth、/chat、/files，JWT 中间件
 │   ├── agent/
 │   │   └── agent.py                # Agent：拼提示词、执行工具、循环推理
@@ -276,7 +276,7 @@ Memora-Agent/
 ```bash
 uv sync --dev
 docker compose up -d
-uv run uvicorn memora_agent.main:app --reload
+uv run uvicorn app.main:app --reload
 uv run pytest
 ```
 

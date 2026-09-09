@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 
-from memora_agent.core.auth import (
+from app.core.auth import (
     CurrentUser,
     TokenError,
     create_access_token,
@@ -13,7 +13,7 @@ from memora_agent.core.auth import (
     hash_password,
     verify_password,
 )
-from memora_agent.core.config import config
+from app.core.config import config
 
 
 def test_create_and_decode_access_token() -> None:
