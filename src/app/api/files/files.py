@@ -124,7 +124,7 @@ async def complete(request: CompleteRequest):
     )
 
 
-@files_router.get("", response_model=ResponseStructure[FileListData])
+@files_router.get("/get-file-list", response_model=ResponseStructure[FileListData])
 async def list_files(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -141,7 +141,7 @@ async def list_files(
     )
 
 
-@files_router.get("/{file_id}", response_model=ResponseStructure[FileSummary])
+@files_router.get("/get-file-status/{file_id}", response_model=ResponseStructure[FileSummary])
 async def get_file(file_id: int):
     """按 id 查自己的文件状态，给前端轮询。别人的 id 与不存在都是 404，不暴露这条在不在。"""
     user = get_current_user()
