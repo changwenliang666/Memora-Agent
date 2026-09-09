@@ -29,6 +29,8 @@ def test_file_info_requires_download_url() -> None:
     with pytest.raises(ValidationError):
         FileInfo.model_validate(
             {
+                "id": 1,
+                "status": "pending",
                 "object_key": "abc/notes.pdf",
                 "filename": "notes.pdf",
                 "content_type": "application/pdf",
@@ -42,6 +44,8 @@ def test_file_info_requires_expires_in() -> None:
     with pytest.raises(ValidationError):
         FileInfo.model_validate(
             {
+                "id": 1,
+                "status": "pending",
                 "object_key": "abc/notes.pdf",
                 "filename": "notes.pdf",
                 "content_type": "application/pdf",
@@ -53,6 +57,8 @@ def test_file_info_requires_expires_in() -> None:
 
 def test_file_info_keeps_declared_fields() -> None:
     info = FileInfo(
+        id=1,
+        status="pending",
         object_key="abc/notes.pdf",
         filename="notes.pdf",
         content_type="application/pdf",
@@ -61,6 +67,8 @@ def test_file_info_keeps_declared_fields() -> None:
         expires_in=3600,
     )
 
+    assert info.id == 1
+    assert info.status == "pending"
     assert info.object_key == "abc/notes.pdf"
     assert info.filename == "notes.pdf"
     assert info.content_type == "application/pdf"

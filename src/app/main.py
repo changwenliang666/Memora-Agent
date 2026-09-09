@@ -17,7 +17,7 @@ from app.service.qdrant_service import qdrantService
 async def lifespan(app: FastAPI):
     qdrantService.initQdrant()
     # 清空向量数据库
-    #qdrantService.delete()
+    # qdrantService.delete()
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

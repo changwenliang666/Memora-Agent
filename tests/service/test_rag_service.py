@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 from qdrant_client.models import UpdateStatus
 
-from app.db.models.knowledge_file import KnowledgeFile
 from app.schema.config import MineruConfig
 from app.service.rag_service import (
     ImageOcrItem,
@@ -75,23 +74,6 @@ class FakeR2Storage:
 
     def put_object(self, object_key: str, body: bytes, content_type: str) -> None:
         self.puts.append((object_key, body, content_type))
-
-
-class FakeSession:
-    def __init__(self):
-        self.added: list[KnowledgeFile] = []
-
-    def add(self, obj: KnowledgeFile) -> None:
-        self.added.append(obj)
-
-    async def commit(self) -> None:
-        return None
-
-    async def __aenter__(self) -> "FakeSession":
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
-        return False
 
 
 class FakeEmbedding:
@@ -512,12 +494,21 @@ def test_copy_markdown_images_uses_file_prefix(monkeypatch) -> None:
     assert all(key.startswith("kb/file-id/") for key in stored_image_keys)
 
 
-def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
-    session = FakeSession()
-    monkeypatch.setattr(
-        "app.service.rag_service.AsyncSessionLocal",
-        lambda: session,
-    )
+class FakeKnowledgeFiles:
+    def __init__(self) -> None:
+        self.done: list[dict] = []
+        self.failed: list[tuple[int, str]] = []
+
+    async def mark_done(self, file_id: int, **kwargs) -> None:
+        self.done.append({"id": file_id, **kwargs})
+
+    async def mark_failed(self, file_id: int, error_message: str) -> None:
+        self.failed.append((file_id, error_message))
+
+
+def test_build_knowledge_base_marks_done_after_upsert(monkeypatch) -> None:
+    files = FakeKnowledgeFiles()
+    monkeypatch.setattr("app.service.rag_service.knowledgeFileService", files)
     monkeypatch.setattr(
         "app.service.rag_service.EmbeddingService",
         lambda: FakeEmbedding(),
@@ -551,28 +542,24 @@ def test_build_knowledge_base_inserts_row_after_upsert(monkeypatch) -> None:
             7,
             "tester",
             12,
+            99,
         )
     )
 
     assert qdrant.points is not None
-    assert len(session.added) == 1
-    record = session.added[0]
-    assert record.user_id == 7
-    assert record.filename == "notes.txt"
-    assert record.object_key == "abc/notes.txt"
-    assert record.size == 12
-    assert record.image_keys == []
-    assert record.markdown is None
-    assert record.plain_text == "hello txt"
-    assert record.ocr_results == []
+    assert len(files.done) == 1
+    record = files.done[0]
+    assert record["id"] == 99
+    assert record["image_keys"] == []
+    assert record["markdown"] is None
+    assert record["plain_text"] == "hello txt"
+    assert record["ocr_results"] == []
+    assert files.failed == []
 
 
-def test_build_knowledge_base_skips_insert_when_upsert_fails(monkeypatch) -> None:
-    session = FakeSession()
-    monkeypatch.setattr(
-        "app.service.rag_service.AsyncSessionLocal",
-        lambda: session,
-    )
+def test_build_knowledge_base_marks_failed_when_upsert_fails(monkeypatch) -> None:
+    files = FakeKnowledgeFiles()
+    monkeypatch.setattr("app.service.rag_service.knowledgeFileService", files)
     monkeypatch.setattr(
         "app.service.rag_service.EmbeddingService",
         lambda: FakeEmbedding(),
@@ -605,6 +592,7 @@ def test_build_knowledge_base_skips_insert_when_upsert_fails(monkeypatch) -> Non
                 7,
                 "tester",
                 12,
+                99,
             )
         )
     except Exception as exc:
@@ -612,4 +600,51 @@ def test_build_knowledge_base_skips_insert_when_upsert_fails(monkeypatch) -> Non
     else:
         raise AssertionError("expected 建库失败")
 
-    assert session.added == []
+    assert files.done == []
+    assert files.failed == [(99, "建库失败")]
+
+
+def test_build_knowledge_base_marks_done_when_chunks_empty(monkeypatch) -> None:
+    files = FakeKnowledgeFiles()
+    monkeypatch.setattr("app.service.rag_service.knowledgeFileService", files)
+
+    async def fake_prepare(*args, **kwargs):
+        return PreparedIngest(
+            text_for_embedding="",
+            stored_markdown=None,
+            stored_plain_text="",
+            stored_ocr_results=[],
+            stored_image_keys=[],
+        )
+
+    monkeypatch.setattr(
+        "app.service.rag_service.RagService.prepare_ingest",
+        fake_prepare,
+    )
+    monkeypatch.setattr(
+        "app.service.rag_service.RagService.split_text",
+        lambda *args, **kwargs: [],
+    )
+
+    asyncio.run(
+        RagService.build_knowledge_base(
+            "https://r2.example/notes.txt",
+            "abc/notes.txt",
+            "notes.txt",
+            7,
+            "tester",
+            12,
+            99,
+        )
+    )
+
+    assert files.done == [
+        {
+            "id": 99,
+            "image_keys": [],
+            "markdown": None,
+            "plain_text": "",
+            "ocr_results": [],
+        }
+    ]
+    assert files.failed == []

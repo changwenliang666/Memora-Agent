@@ -13,9 +13,8 @@ from mineru import MinerU
 from qdrant_client.models import PointStruct, UpdateStatus
 
 from app.core.config import config
-from app.db.database import AsyncSessionLocal
-from app.db.models.knowledge_file import KnowledgeFile
 from app.service.embedding_service import EmbeddingService
+from app.service.knowledge_file_service import knowledgeFileService
 from app.service.ocr_service import OcrService
 from app.service.qdrant_service import qdrantService
 from app.service.text_split import split_ingest_text
@@ -108,7 +107,7 @@ class RagService:
     """知识库入库编排服务。
 
     按文件类型把上传文件转成可嵌入文本，切块后写入 Qdrant，
-    并在向量写入成功后落库 KnowledgeFile 元数据。
+    并在向量写入成功后把 complete 时插入的 KnowledgeFile 更新为 done。
     入口是 ``build_knowledge_base``，其余方法按解析 / 切分 / 写库拆开。
     """
 
@@ -328,52 +327,24 @@ class RagService:
                 print(f"mineru 原始产出归档失败 {key}: {e}")
 
     @staticmethod
-    def _ocr_results_payload(ocr_results: list[ImageOcrItem]) -> list[dict]:
-        """把 OCR 结果转成可落库的 JSON dict 列表（image_key + text）。"""
-        return [{"image_key": item.image_key, "text": item.text} for item in ocr_results]
-
-    @staticmethod
     async def save_knowledge_file(
-        user_id: int,
-        filename: str,
-        object_key: str,
-        size: int,
+        knowledge_file_id: int,
         image_keys: list[str],
         markdown: str | None,
         plain_text: str | None,
         ocr_results: list[ImageOcrItem],
     ) -> None:
-        """把知识文件元数据写入数据库。
+        """向量写入成功后，把正文回填到 complete 时插入的那一行并标 done。
 
-        仅在 Qdrant upsert 成功后调用，避免向量没写上却留下孤立记录。
-        markdown / plain_text 按文件类型互斥填充：
-        PDF/DOCX 有 markdown，txt/md 有 plain_text。
-        ocr_results 在视觉模型跑过时按图一条，否则为空列表。
-
-        Args:
-            user_id: 上传用户 id。
-            filename: 原始文件名。
-            object_key: 源文件在 R2 上的 key。
-            size: 文件字节数。
-            image_keys: 转存到 R2 的配图 key 列表。
-            markdown: MinerU 转换结果；非转换类文件为 None。
-            plain_text: 纯文本内容；非 txt/md 为 None。
-            ocr_results: 按图 OCR 结果；未跑视觉模型时为空列表。
+        不再 insert。失败路径由 ``mark_failed`` 改同一行，避免向量没写上却多一条记录。
         """
-        async with AsyncSessionLocal() as session:
-            session.add(
-                KnowledgeFile(
-                    user_id=user_id,
-                    filename=filename,
-                    object_key=object_key,
-                    size=size,
-                    image_keys=image_keys,
-                    markdown=markdown,
-                    plain_text=plain_text,
-                    ocr_results=RagService._ocr_results_payload(ocr_results),
-                )
-            )
-            await session.commit()
+        await knowledgeFileService.mark_done(
+            knowledge_file_id,
+            image_keys=image_keys,
+            markdown=markdown,
+            plain_text=plain_text,
+            ocr_results=ocr_results,
+        )
 
     @staticmethod
     async def prepare_ingest(
@@ -478,49 +449,41 @@ class RagService:
         user_id: int,
         username: str,
         size: int,
+        knowledge_file_id: int,
     ):
-        """知识库入库主流程：解析 → 切块 → 向量化 → 写入 Qdrant → 落库元数据。
+        """知识库入库主流程：解析 → 切块 → 向量化 → 写入 Qdrant → 更新已有行。
 
         顺序：
         1. ``prepare_ingest`` 按类型产出嵌入文本和 markdown / 纯文本 / OCR / 配图 key。
-        2. ``split_text`` 切块；没有任何块则直接返回（例如空文件）。
+        2. ``split_text`` 切块；没有任何块则把已有行标 done 后返回。
         3. 批量打 embedding，组装 PointStruct，upsert 到 Qdrant。
-        4. 仅当 Qdrant 返回 COMPLETED 才写 KnowledgeFile，并发飞书成功 webhook。
-        5. 任一步失败都打印异常后统一抛出「建库失败」，避免把内部细节漏给调用方。
-
-        Args:
-            file_url: 源文件可下载 URL。
-            object_key: 源文件在 R2 上的 key。  
-            filename: 原始文件名。
-            user_id: 上传用户 id。
-            size: 文件字节数。
-
-        Raises:
-            Exception: 切块后写入失败、Qdrant 未完成、或解析过程出错。
+        4. 仅当 Qdrant 返回 COMPLETED 才更新 KnowledgeFile 为 done，并发飞书成功 webhook。
+        5. 任一步失败都打印异常后把同一行标为 failed，对外只抛「建库失败」。
         """
         try:
-            # 1. 按文件类型解析，产出嵌入文本和附属产物
             prepared = await RagService.prepare_ingest(file_url, object_key, filename)
-            # 2. 切块；没有任何块（如空文件）直接结束
             chunks = RagService.split_text(
                 prepared.text_for_embedding, object_key, filename
             )
+            # 空文件以前是静默 return，有状态机后必须落到 done，否则会永远 processing
             if len(chunks) == 0:
+                await RagService.save_knowledge_file(
+                    knowledge_file_id,
+                    image_keys=prepared.stored_image_keys,
+                    markdown=prepared.stored_markdown,
+                    plain_text=prepared.stored_plain_text,
+                    ocr_results=prepared.stored_ocr_results,
+                )
                 return
 
-            print("chunk数量",len(chunks))
+            print("chunk数量", len(chunks))
 
-            # 3. 批量向量化，组装写入点并 upsert 到 Qdrant
             vectors = await EmbeddingService().get_batch_embedding(chunks)
             points = RagService.build_qdrant_points(chunks, vectors)
             update_status = qdrantService.upsert(points)
             if update_status.status == UpdateStatus.COMPLETED:
-                # 4. 向量写入成功才落库元数据、发成功 webhook
                 await RagService.save_knowledge_file(
-                    user_id=user_id,
-                    filename=filename,
-                    object_key=object_key,
-                    size=size,
+                    knowledge_file_id,
                     image_keys=prepared.stored_image_keys,
                     markdown=prepared.stored_markdown,
                     plain_text=prepared.stored_plain_text,
@@ -528,9 +491,9 @@ class RagService:
                 )
                 WebhookService.send_knowledge_base_build_success(filename, username)
             else:
-                # Qdrant 未确认完成，按失败处理
                 raise Exception("建库失败")
         except Exception as e:
-            # 统一兜底：记录内部异常，对外只暴露「建库失败」
+            # 对内 print 细节，对外和落库都只留「建库失败」
             print(e)
+            await knowledgeFileService.mark_failed(knowledge_file_id, "建库失败")
             raise Exception("建库失败")

@@ -38,6 +38,8 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-memora}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-memora_dev}
+      # MinerU 最长 20 分钟，默认 30 分钟 consumer_timeout 偏紧
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit consumer_timeout 2400000"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
