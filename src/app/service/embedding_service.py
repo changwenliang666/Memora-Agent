@@ -1,6 +1,8 @@
 from app.core.provider import LLMProvider
 from langchain_core.documents import Document
 
+#每次最多处理的chunk数量
+MAX_EMMBEDING_NUM = 20
 
 class EmbeddingService:
     def __init__(self):
@@ -13,4 +15,15 @@ class EmbeddingService:
         return self.embeddings.embed_query(text)
     # 批量获取embedding
     async def get_batch_embedding(self, documents: list[Document]):
-        return await self.embeddings.aembed_documents([document.page_content for document in documents])
+        allChunks = documents[:]
+        if len(allChunks) > MAX_EMMBEDING_NUM:
+            vectors:list[list[float]] = []
+            while(len(allChunks) > 0):
+                dealChunk:list[Document] =  allChunks[:MAX_EMMBEDING_NUM]
+                del allChunks[:MAX_EMMBEDING_NUM]
+                curVectors = await self.embeddings.aembed_documents([document.page_content for document in dealChunk])
+                vectors.extend(curVectors)
+            return vectors;
+        else:
+            return await self.embeddings.aembed_documents([document.page_content for document in documents])
+        

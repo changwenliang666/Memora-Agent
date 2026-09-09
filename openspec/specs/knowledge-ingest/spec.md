@@ -27,12 +27,22 @@ When a signed-in user completes an upload, the system SHALL parse the object acc
 
 ### Requirement: Markdown images are recognized before embedding
 
-When converted markdown contains markdown image references, the system SHALL give the vision model each image URL already present in the markdown and SHALL decide per image whether the figure has retrieval value. When the vision model returns extractable knowledge text, the system MUST replace that image markup with that text before splitting and embedding. When the vision model indicates the figure has no retrieval value, or when recognition of that image fails, the system MUST remove that image markup from the text that is split and embedded and MUST NOT substitute a placeholder description. Failure or skip of one image MUST NOT fail ingest of the rest of the document. This per-image skip MUST apply only to markdown image references, not to a standalone image file upload.
+When converted markdown contains markdown image references, the system SHALL present each figure to the vision model in a form the model can read, and SHALL decide per image whether the figure has retrieval value using the same keep-or-skip rules for every address form. When a reference is an absolute `http`/`https` URL or a `data:` URI, the system MUST give that URI to the existing markdown-figure recognition path. When a reference is a relative path (including `images/<filename>` and a bare filename), the system MUST first resolve it against image bytes produced with the converted markdown, MUST present those bytes to the same recognition path, and MUST NOT pass the relative path string to the vision model as if it were a fetchable URL. When the relative path cannot be resolved to image bytes, the system MUST treat that figure as a recognition failure. When the vision model returns extractable knowledge text, the system MUST replace that image markup with that text before splitting and embedding. When the vision model indicates the figure has no retrieval value, or when recognition of that image fails, the system MUST remove that image markup from the text that is split and embedded and MUST NOT substitute a placeholder description. Failure or skip of one image MUST NOT fail ingest of the rest of the document. Adjacent image markups without surrounding whitespace MUST each be processed. This per-image skip MUST apply only to markdown image references, not to a standalone image file upload.
 
 #### Scenario: Meaningful markdown image is replaced with vision text
 
 - **WHEN** converted markdown contains an image whose URL is reachable and the vision model returns knowledge text
 - **THEN** the text that is split and embedded includes that vision text in place of that image markup
+
+#### Scenario: Relative markdown image is recognized from converter bytes
+
+- **WHEN** converted markdown contains `![](images/<filename>)` (or the same markup adjacent to another image with no whitespace) and the converter produced bytes for that filename, and the vision model returns knowledge text
+- **THEN** the text that is split and embedded includes that vision text in place of that image markup, and the stored vision-results array includes an element for that figure
+
+#### Scenario: Unresolved relative markdown image is treated as a failed image
+
+- **WHEN** converted markdown contains a relative image path that has no matching converter image bytes
+- **THEN** that image's markup is not left in the embedding text, and that figure is omitted from the stored vision-results array
 
 #### Scenario: Decorative markdown image is stripped from embedding text
 
@@ -46,12 +56,17 @@ When converted markdown contains markdown image references, the system SHALL giv
 
 ### Requirement: Extracted images are stored under the file prefix
 
-When converted markdown contains images that the vision model treats as having retrieval value, the system SHALL copy those kept images into the same per-file object prefix as the original file, under an `images/` segment. The persisted record MUST list only those copied object keys. Images that the vision model treats as having no retrieval value, and images whose recognition failed, MUST NOT be copied into object storage and MUST NOT appear in the companion image key list. The system MUST NOT persist expiring download URLs as the long-term image addresses.
+When converted markdown contains images that the vision model treats as having retrieval value, the system SHALL copy those kept images into the same per-file object prefix as the original file, under an `images/` segment. When a kept figure was an absolute `http`/`https` URL, the system MUST copy by downloading that URL, as it does today. When a kept figure was resolved from converter image bytes, the system MUST copy those bytes into object storage and MUST NOT attempt to download the relative path as a URL. The persisted record MUST list only those copied object keys. Images that the vision model treats as having no retrieval value, and images whose recognition failed, MUST NOT be copied into object storage and MUST NOT appear in the companion image key list. The system MUST NOT persist expiring download URLs as the long-term image addresses.
 
 #### Scenario: PDF figures land next to the original object
 
 - **WHEN** ingest of a PDF finds markdown images that the vision model treats as having retrieval value and embedding later succeeds
 - **THEN** each copied image's object key shares the original file's prefix, includes an `images/` segment, and is stored on the knowledge file record
+
+#### Scenario: Relative kept figure is copied from converter bytes
+
+- **WHEN** ingest of a PDF finds a relative markdown image that the vision model treats as having retrieval value, converter bytes exist for that path, and embedding later succeeds
+- **THEN** those converter bytes are stored under the original file's prefix with an `images/` segment, and that object key is stored on the knowledge file record
 
 #### Scenario: Decorative markdown figure is not copied
 
@@ -184,3 +199,32 @@ The system SHALL read the signed-in user id during `POST /files/complete` and pa
 
 - **WHEN** a signed-in user completes an upload
 - **THEN** the ingest job records that user's id on a successful knowledge file row
+
+### Requirement: Converter raw output is archived to object storage
+
+When the document converter successfully converts a `.pdf` or `.docx`, the system SHALL archive the converter's raw output into object storage under the original file's prefix, in a dedicated `mineru/` segment that MUST NOT overlap the kept-figures `images/` segment. The archive MUST include the raw converted markdown exactly as the converter produced it (relative image references intact) and every image asset the converter produced, uploaded so that each raw markdown reference such as `images/<filename>` resolves to an archived object under the same `mineru/` segment. Archiving MUST apply to every converter-produced image, regardless of whether that figure is later kept, skipped as decorative, or fails recognition. Archiving MUST NOT wait for or depend on per-figure vision decisions. A failure to archive any single object MUST be logged, MUST NOT abort the remaining archive uploads, and MUST NOT fail ingest. The archive location MUST be derivable from the original file `object_key` alone, without a database lookup. Files that do not go through the document converter (`.txt`, `.md`, `.png`, `.jpg`, `.jpeg`) MUST NOT produce a converter archive.
+
+#### Scenario: All PDF figures are archived regardless of keep-or-skip
+
+- **WHEN** a PDF converts successfully and the converter produced 5 images, and the vision model later keeps only 3 of them
+- **THEN** the original file's prefix contains a `mineru/` segment holding the raw converted markdown and all 5 converter images
+
+#### Scenario: Raw markdown references resolve inside the archive
+
+- **WHEN** the archived raw markdown contains a reference `images/<filename>`
+- **THEN** an archived object for that figure exists under the same `mineru/` segment at its `images/` subpath
+
+#### Scenario: Archive survives a later ingest failure
+
+- **WHEN** conversion succeeds and raw output is archived, but splitting, embedding, or vector upsert afterwards fails
+- **THEN** the archived `mineru/` objects remain in object storage for troubleshooting
+
+#### Scenario: Single archive upload failure does not fail ingest
+
+- **WHEN** uploading one archived image or the raw markdown fails
+- **THEN** the failure is logged, the remaining archive uploads are still attempted, and ingest continues
+
+#### Scenario: Non-converter files produce no archive
+
+- **WHEN** a `.txt`, `.md`, or standalone image file is ingested
+- **THEN** no `mineru/` archive objects are created for that file
