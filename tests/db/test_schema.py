@@ -1,4 +1,8 @@
-from app.db.schema import knowledge_files_align_statements
+from app.db.schema import (
+    conversations_align_statements,
+    knowledge_files_align_statements,
+    messages_align_statements,
+)
 
 _CURRENT_COLUMNS = {
     "id",
@@ -66,3 +70,35 @@ def test_align_statements_adds_timing_columns_when_missing() -> None:
     assert "ADD COLUMN queue_wait_ms BIGINT NULL" in joined
     assert "ADD COLUMN duration_ms BIGINT NULL" in joined
     assert "ADD COLUMN error_message VARCHAR(512) NULL" in joined
+
+
+def test_conversations_align_adds_missing_columns() -> None:
+    statements = conversations_align_statements({"id", "user_id"})
+    joined = " ".join(statements)
+    assert "ADD COLUMN title VARCHAR(255) NOT NULL DEFAULT ''" in joined
+    assert "ADD COLUMN message_count INT NOT NULL DEFAULT 0" in joined
+
+
+def test_conversations_align_noop_when_current() -> None:
+    statements = conversations_align_statements(
+        {"id", "user_id", "title", "message_count", "created_at", "updated_at"}
+    )
+    assert statements == []
+
+
+def test_messages_align_adds_missing_columns() -> None:
+    statements = messages_align_statements({"id", "conversation_id"})
+    joined = " ".join(statements)
+    assert "ADD COLUMN seq INT NOT NULL DEFAULT 0" in joined
+    assert "ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'user'" in joined
+    assert "MODIFY content" not in joined
+
+
+def test_messages_align_upgrades_content_type() -> None:
+    statements = messages_align_statements(
+        {"id", "conversation_id", "role", "content", "seq", "created_at"}
+    )
+    joined = " ".join(statements)
+    assert "MODIFY content MEDIUMTEXT NOT NULL" in joined
+    assert "ADD COLUMN seq" not in joined
+    assert "ADD COLUMN role" not in joined

@@ -1,10 +1,20 @@
 from pathlib import Path
+import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage,AIMessage
 
+from app.core.auth import get_current_user
 from app.core.config import config
-from app.schema.chat import ChatRequest
+from app.schema.chat import (
+    ChatRequest,
+    ConversationListData,
+    ConversationSummary,
+    StoredChatMessage,
+    StoredMessageListData,
+)
+from app.schema.response import ResponseStructure
 from app.tools.tools import Tools
 from app.agent.agent import Agent
 from app.schema.config import AgentConfig
@@ -18,45 +28,240 @@ from langchain_text_splitters import (
 )
 from app.service.embedding_service import EmbeddingService
 from app.service.qdrant_service import QdrantService
+from app.service.chat_history_service import chatHistoryService
+from app.service.chat_stream_store import chatStreamStore
 from app.service.webhook_service import WebhookService
 
 chat_router = APIRouter(
     prefix="/chat",
     tags=["chat"],
 )
+conversations_router = APIRouter(
+    prefix="/conversations",
+    tags=["conversations"],
+)
+
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _sse(event: str, data: dict) -> str:
+    """序列化一帧 SSE：event 行 + data 行。"""
+    import json
+
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _history_to_messages(history) -> list:
+    """客户端可选 history 还原成 LangChain 消息；只认 user / assistant。"""
+    messages = []
+    for item in history:
+        if item.role == "user":
+            messages.append(HumanMessage(content=item.content))
+        else:
+            messages.append(AIMessage(content=item.content))
+    return messages
+
+
+def _stored_to_messages(rows) -> list:
+    """MySQL 历史行还原成 Agent 输入。"""
+    messages = []
+    for row in rows:
+        if row.role == "user":
+            messages.append(HumanMessage(content=row.content))
+        else:
+            messages.append(AIMessage(content=row.content))
+    return messages
 
 
 @chat_router.post("/stream")
-async def chat(request: ChatRequest):
-    # TODO: 使用 request 中的模型选择接入流式响应。
-    # model_response_parts: list[str] = []
+async def chat_stream(request: ChatRequest):
+    """流式聊天：Agent 边生成边以 SSE 推 message.* 事件，事件同时进 Redis 供断线续传。
 
-    # async def generate() -> AsyncIterator[str]:
-    #     try:
-    #         async for chunk in provider.astream(
-    #             [HumanMessage(content=request.message)]
-    #         ):
-    #             if chunk.content:
-    #                 content = str(chunk.content)
-    #                 model_response_parts.append(content)
-    #                 yield f"data: {json.dumps({'message': chunk.content}, ensure_ascii=False)}\n\n"
-    #     except Exception as e:
-    #         yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
-    #         return
-    #     model_response_content = "".join(model_response_parts)
-    #     print(model_response_content)
-    #     yield "data: [DONE]\n\n"
+    有 conversation_id 或两者都空时落 MySQL 历史；只带 history 时保持无状态。
+    """
+    if request.provider_type is None or request.model_name is None:
+        return JSONResponse(
+            status_code=400,
+            content={"message": "error", "error": "需要提供 provider_type 和 model_name"},
+        )
 
-    # return StreamingResponse(
-    #     generate(),
-    #     media_type="text/event-stream",
-    #     headers={
-    #         "Cache-Control": "no-cache",
-    #         "X-Accel-Buffering": "no",
-    #     },
-    # )
-    tools = Tools()
-    return {"message": "hello world", "tools": tools.tools}
+    user = get_current_user()
+    persist = False
+    conversation_id: int | None = None
+    history_messages = _history_to_messages(request.history)
+
+    if request.conversation_id is not None:
+        conversation = await chatHistoryService.get_for_user(
+            user.id, request.conversation_id
+        )
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        stored = await chatHistoryService.all_messages(user.id, conversation.id)
+        history_messages = _stored_to_messages(stored or [])
+        persist = True
+        conversation_id = conversation.id
+    elif not request.history:
+        conversation = await chatHistoryService.create_conversation(
+            user.id, request.message
+        )
+        persist = True
+        conversation_id = conversation.id
+        history_messages = []
+
+    if persist:
+        await chatHistoryService.append_message(
+            user.id, conversation_id, "user", request.message
+        )
+
+    try:
+        agent = Agent(
+            AgentConfig(
+                provider_type=request.provider_type,
+                model_name=request.model_name,
+                tools=Tools().get_all_tools(),
+                history_messages=history_messages,
+                system_prompt="你是一个ai助手,根据用户的提问，简洁明了的回答用户的问题.",
+                human_input_message=request.message,
+                stream=True,
+                max_round=10,
+            )
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"message": "error", "error": str(exc)},
+        )
+
+    async def generate():
+        message_id = uuid.uuid4().hex
+        store = chatStreamStore
+        await store.start(message_id, model=request.model_name)
+        started = {"message_id": message_id}
+        if conversation_id is not None:
+            started["conversation_id"] = conversation_id
+        yield _sse("message.started", started)
+
+        final_status = "failed"
+        final_content_parts: list[str] = []
+        try:
+            async for event in agent.run_stream():
+                if event.event == "message.delta":
+                    seq = await store.append(message_id, event.event, event.data)
+                    final_content_parts.append(event.data["content"])
+                    yield _sse(event.event, {"seq": seq, **event.data})
+                else:
+                    # 终态不落 Redis 事件流，只写状态 hash；回放时由结尾按 status 补发。
+                    yield _sse(event.event, event.data)
+                    if event.event == "message.completed":
+                        final_status = "completed"
+        except Exception:
+            final_status = "failed"
+            yield _sse("message.failed", {"message": "生成失败"})
+        finally:
+            full_text = "".join(final_content_parts)
+            await store.finish(message_id, final_status, content=full_text)
+            if persist and final_status == "completed" and full_text:
+                await chatHistoryService.append_message(
+                    user.id, conversation_id, "assistant", full_text
+                )
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
+@chat_router.get("/messages/{message_id}")
+async def resume_message(message_id: str, from_seq: int = Query(default=0, ge=0)):
+    """断线续传：回放 message_id 在 from_seq 之后已缓存的事件。不存在/过期返回 404。"""
+    record = await chatStreamStore.read(message_id, from_seq=from_seq)
+    if record is None:
+        return JSONResponse(
+            status_code=404,
+            content={"message": "error", "error": "消息不存在或已过期"},
+        )
+
+    async def generate():
+        for frame in record["events"]:
+            yield _sse(frame["event"], frame["data"])
+        status = record["status"].get("status")
+        # 已结束的轮次补发终态；仍在生成的轮次在 TTL 窗口内继续等新事件
+        if status == "completed":
+            yield _sse("message.completed", {})
+        elif status == "failed":
+            yield _sse("message.failed", {"message": record["status"].get("content", "")})
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
+@conversations_router.get("/", response_model=ResponseStructure[ConversationListData])
+async def list_conversations(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """当前用户的会话列表，最近更新的在前。"""
+    user = get_current_user()
+    rows, total = await chatHistoryService.list_for_user(user.id, limit, offset)
+    return ResponseStructure[ConversationListData](
+        message="查询成功",
+        data=ConversationListData(
+            items=[
+                ConversationSummary(
+                    id=row.id,
+                    title=row.title,
+                    message_count=row.message_count,
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                )
+                for row in rows
+            ],
+            total=total,
+        ),
+    )
+
+
+@conversations_router.get(
+    "/{conversation_id}/messages",
+    response_model=ResponseStructure[StoredMessageListData],
+)
+async def list_conversation_messages(
+    conversation_id: int,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """当前用户某个会话的消息，按 seq 正序。别人的 id 与不存在都是 404。"""
+    user = get_current_user()
+    listed = await chatHistoryService.list_messages(
+        user.id, conversation_id, limit, offset
+    )
+    if listed is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    rows, total = listed
+    return ResponseStructure[StoredMessageListData](
+        message="查询成功",
+        data=StoredMessageListData(
+            items=[
+                StoredChatMessage(
+                    id=row.id,
+                    role=row.role,
+                    content=row.content,
+                    seq=row.seq,
+                    created_at=row.created_at,
+                )
+                for row in rows
+            ],
+            total=total,
+        ),
+    )
+
 
 @chat_router.post("/agent")
 async def agent(request: ChatRequest):

@@ -3,13 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.api.auth.auth import auth_router
-from app.api.chat.chat import chat_router
+from app.api.chat.chat import chat_router, conversations_router
 from app.api.files.files import files_router
 from app.core.auth_middleware import AuthMiddleware
 from app.db.database import Base, engine
+from app.db.models import Conversation as _Conversation  # noqa: F401
 from app.db.models import KnowledgeFile as _KnowledgeFile  # noqa: F401
+from app.db.models import Message as _Message  # noqa: F401
 from app.db.models import User as _User  # noqa: F401
-from app.db.schema import align_knowledge_files_schema
+from app.db.schema import align_chat_history_schema, align_knowledge_files_schema
 from app.service.qdrant_service import qdrantService
 
 
@@ -22,6 +24,7 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             await conn.run_sync(align_knowledge_files_schema)
+            await conn.run_sync(align_chat_history_schema)
     except Exception as exc:
         print(exc)
     yield
@@ -43,4 +46,5 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(chat_router)
+app.include_router(conversations_router)
 app.include_router(files_router)

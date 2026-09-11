@@ -166,11 +166,53 @@ curl -X POST http://127.0.0.1:8000/chat/agent \
 | `POST` | `/chat/agent` | 可用 | 运行 Agent 循环；需 Bearer JWT |
 | `POST` | `/chat/rule` | 可用 | 规则校验；需 Bearer JWT |
 | `POST` | `/chat/intent` | 可用 | 意图分类；需 Bearer JWT |
-| `POST` | `/chat/stream` | 占位 | 流式接口尚未接上；需 Bearer JWT |
+| `POST` | `/chat/stream` | 可用 | 流式 Agent 回复（SSE）；可落会话历史；需 Bearer JWT |
+| `GET` | `/chat/messages/{message_id}` | 可用 | 断线续传，按 `from_seq` 回放 Redis 缓冲；需 Bearer JWT |
+| `GET` | `/conversations` | 可用 | 当前用户会话列表（最近更新在前）；需 Bearer JWT |
+| `GET` | `/conversations/{id}/messages` | 可用 | 某会话消息，按 `seq` 正序分页；需 Bearer JWT |
 | `POST` | `/files/presign` | 可用 | 签发 R2 预签名 PUT；需 Bearer JWT |
 | `POST` | `/files/complete` | 可用 | 签发短时 GET 并后台切文档；需 Bearer JWT |
 
-请求体统一为 `ChatRequest`：必填 `message`。`/chat/agent` 还需要 `provider_type` 和 `model_name`。
+请求体统一为 `ChatRequest`：必填 `message`。`/chat/agent` 与 `/chat/stream` 还需要 `provider_type` 和 `model_name`。`/chat/stream` 还可传：
+
+- `conversation_id`：继续已有会话。服务端用该会话的 MySQL 历史构造 Agent 输入，并忽略 body 里的 `history`。
+- `history`（`[{role, content}]`，role 仅 `user`/`assistant`）：无 `conversation_id` 时的无状态上下文；带了 `history` 且没有 `conversation_id` 时**不建会话、不落库**。
+- 两者都不传：新建会话，本轮写入历史。
+
+`message_id` 和 `conversation_id` 不是一回事：前者对应 Redis 里这一轮可续传的事件流（约 10 分钟 TTL），后者对应 MySQL 里可翻的会话。一个管断线，一个管历史。
+
+### 流式聊天（`/chat/stream`）
+
+响应是 SSE（`text/event-stream`），用 `event:` 字段区分事件，`data:` 是该事件的 JSON 载荷。前端应忽略不认识的 `event`。
+
+| 事件 | data | 含义 |
+|------|------|------|
+| `message.started` | `{message_id, conversation_id?}` | 一轮开始；落库时同时带出会话 id |
+| `message.delta` | `{seq, content}` | 一个文本增量，`seq` 单调递增 |
+| `message.completed` | `{}` | 本轮正常结束；此时才把助手整段写入 MySQL |
+| `message.failed` | `{message}` | 本轮失败（模型/工具异常或达最大轮次）；不写半成品助手消息 |
+
+用户消息在流开始前写入会话。断线重连：记下首帧的 `message_id` 和已收到的最大 `seq`，请求 `GET /chat/messages/{message_id}?from_seq=N` 即可从断点继续以 SSE 接收，服务端不会重新生成。Redis 重启或过期则该轮不可恢复，需重新提问；会话历史仍在 MySQL，可用 `conversation_id` 再问一轮。
+
+示例：
+
+```
+event: message.started
+data: {"message_id": "a1b2...", "conversation_id": 12}
+
+event: message.delta
+data: {"seq": 1, "content": "根据"}
+
+event: message.delta
+data: {"seq": 2, "content": "制度"}
+
+event: message.completed
+data: {}
+```
+
+### 会话历史
+
+`GET /conversations?limit=20&offset=0` 返回当前用户的会话摘要（`id`、`title`、`message_count`、时间戳），按最近更新倒序。`GET /conversations/{id}/messages?limit=50&offset=0` 返回该会话消息（`role`、`content`、`seq`），按 `seq` 正序。别人的会话 id 与不存在都是 404，不暴露这条在不在。
 
 文件直传的流程、预签名原理和 `.env` 填法见 [docs/r2-file-upload.md](docs/r2-file-upload.md)。
 
@@ -181,14 +223,14 @@ Memora-Agent/
 ├── config/
 │   └── models.toml                 # Provider 与模型清单
 ├── src/app/
-│   ├── main.py                     # FastAPI 入口，挂载 /auth、/chat、/files，JWT 中间件
+│   ├── main.py                     # FastAPI 入口，挂载 /auth、/chat、/conversations、/files，JWT 中间件
 │   ├── agent/
 │   │   └── agent.py                # Agent：拼提示词、执行工具、循环推理
 │   ├── api/
 │   │   ├── auth/
 │   │   │   └── auth.py             # /auth/register、/auth/login
 │   │   ├── chat/
-│   │   │   └── chat.py             # /chat/agent、/rule、/intent、/stream
+│   │   │   └── chat.py             # /chat/agent、/rule、/intent、/stream；/conversations
 │   │   └── files/
 │   │       └── files.py            # /files/presign、/files/complete
 │   ├── core/
@@ -204,7 +246,7 @@ Memora-Agent/
 │   │   └── policy.py               # 拦截词表
 │   ├── schema/
 │   │   ├── auth.py                 # 注册 / 登录请求与响应
-│   │   ├── chat.py                 # ChatRequest
+│   │   ├── chat.py                 # ChatRequest、SSE 载荷、会话列表
 │   │   ├── config.py               # 模型 / Provider / Agent 配置类型
 │   │   ├── files.py                # 文件直传请求 / 响应
 │   │   ├── intent.py               # 意图识别结果
@@ -213,6 +255,8 @@ Memora-Agent/
 │   │   └── tools.py                # 工具列表与参数 Schema
 │   ├── service/
 │   │   ├── user_service.py         # 用户创建与按用户名查询
+│   │   ├── chat_history_service.py # 会话与消息的 MySQL 读写
+│   │   ├── chat_stream_store.py    # 流式一轮的 Redis 断线续传缓冲
 │   │   └── rag_service.py          # 文档解析与切分（complete 后台任务）
 │   ├── storage/
 │   │   ├── r2.py                   # boto3 签发 R2 预签名 URL
@@ -241,7 +285,7 @@ Memora-Agent/
 | 模块 | 职责 |
 |------|------|
 | `api.auth` | 注册、登录，签发 JWT |
-| `api.chat` | 对外 HTTP 入口，把请求转给 Agent / Rule / IntentClassify |
+| `api.chat` | 对外 HTTP 入口：Agent / 流式聊天 / 会话历史 / Rule / IntentClassify |
 | `api.files` | 签发 R2 临时上传 / 下载地址，complete 后触发后台切文档 |
 | `core.auth` | JWT、密码哈希、请求级 `get_current_user()` |
 | `service.RagService` | MinerU 拉文件并按标题 / 长度切分 |

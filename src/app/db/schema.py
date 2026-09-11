@@ -83,3 +83,89 @@ def align_knowledge_files_schema(connection) -> None:
             )
         except Exception as exc:
             print(exc)
+
+
+_CONVERSATIONS = "conversations"
+_MESSAGES = "messages"
+
+
+def conversations_align_statements(columns: set[str]) -> list[str]:
+    """已有 ``conversations`` 缺列时补齐。新库由 create_all 建全表。"""
+    statements: list[str] = []
+    if "title" not in columns:
+        statements.append(
+            f"ALTER TABLE {_CONVERSATIONS} "
+            "ADD COLUMN title VARCHAR(255) NOT NULL DEFAULT ''"
+        )
+    if "message_count" not in columns:
+        statements.append(
+            f"ALTER TABLE {_CONVERSATIONS} "
+            "ADD COLUMN message_count INT NOT NULL DEFAULT 0"
+        )
+    return statements
+
+
+def messages_align_statements(columns: set[str]) -> list[str]:
+    """已有 ``messages`` 缺列时补齐。正文用 MEDIUMTEXT。"""
+    statements: list[str] = []
+    if "content" in columns:
+        statements.append(
+            f"ALTER TABLE {_MESSAGES} MODIFY content MEDIUMTEXT NOT NULL"
+        )
+    if "seq" not in columns:
+        statements.append(
+            f"ALTER TABLE {_MESSAGES} ADD COLUMN seq INT NOT NULL DEFAULT 0"
+        )
+    if "role" not in columns:
+        statements.append(
+            f"ALTER TABLE {_MESSAGES} ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'user'"
+        )
+    return statements
+
+
+def _ensure_index(connection, inspector, table: str, name: str, definition: str) -> None:
+    if table not in inspector.get_table_names():
+        return
+    index_names = {index["name"] for index in inspector.get_indexes(table)}
+    if name in index_names:
+        return
+    try:
+        connection.execute(text(definition))
+    except Exception as exc:
+        print(exc)
+
+
+def align_chat_history_schema(connection) -> None:
+    """把已有 conversations / messages 对齐到当前模型。表不存在则交给 create_all。"""
+    inspector = inspect(connection)
+    names = inspector.get_table_names()
+    if _CONVERSATIONS in names:
+        columns = {column["name"] for column in inspector.get_columns(_CONVERSATIONS)}
+        for statement in conversations_align_statements(columns):
+            try:
+                connection.execute(text(statement))
+            except Exception as exc:
+                print(exc)
+        _ensure_index(
+            connection,
+            inspector,
+            _CONVERSATIONS,
+            "ix_conversations_user_updated",
+            "CREATE INDEX ix_conversations_user_updated "
+            "ON conversations (user_id, updated_at)",
+        )
+    if _MESSAGES in names:
+        columns = {column["name"] for column in inspector.get_columns(_MESSAGES)}
+        for statement in messages_align_statements(columns):
+            try:
+                connection.execute(text(statement))
+            except Exception as exc:
+                print(exc)
+        _ensure_index(
+            connection,
+            inspector,
+            _MESSAGES,
+            "ix_messages_conversation_seq",
+            "CREATE INDEX ix_messages_conversation_seq "
+            "ON messages (conversation_id, seq)",
+        )
